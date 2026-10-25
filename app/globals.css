@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-source);
+  --font-serif: var(--font-fraunces);
+  --color-desk: #1c2633;
+  --color-paper: #f6f1e6;
+  --color-card: #fffdf8;
+  --color-ink: #1c2430;
+  --color-muted: #5c6775;
+  --color-line: #eadfcd;
+  --color-vermilion: #c4452d;
+  --color-pine: #1f6b4a;
+  --color-brass: #8a5a12;
+  --color-sea: #1e4d6b;
+}
+
+body {
+  background: var(--color-desk);
+  color: var(--color-ink);
+  font-family: var(--font-source), "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+mark {
+  background: #f6d98a;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 0.12em;
+}
+
+.font-serif {
+  font-family: var(--font-fraunces), "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+}

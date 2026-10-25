@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0",
+  "synthetic": true,
+  "note": "全部为模拟交易；邮箱使用 example.com，占位地址不能用于实接发信。请替换为团队有权使用的测试邮箱。expected_issues 用于演示验收，不应作为模型的分析输入。",
+  "order": {
+    "id": "DEMO-001",
+    "name": "1,000 custom gift packaging sets",
+    "stage": "before_order_confirmation",
+    "buyer": {"name": "Emma", "email": "buyer@example.com", "country": "UK"},
+    "seller": {"name": "Lin", "email": "seller@example.com", "country": "China"},
+    "reviewer": "seller"
+  },
+  "initial_messages": [
+    {
+      "id": "m1",
+      "source": "fixture",
+      "from_role": "buyer",
+      "sent_at": "2026-10-24T08:00:00Z",
+      "subject": "Gift packaging order - requirements",
+      "body": "Hi Lin, we would like 1,000 custom gift packaging sets based on sample v2, including the protective inserts. We need them delivered to our London warehouse by 20 November 2026. The delivery address is LONDON-DEMO-ADDRESS. Please confirm the price and schedule."
+    },
+    {
+      "id": "m2",
+      "source": "fixture",
+      "from_role": "seller",
+      "sent_at": "2026-10-24T09:00:00Z",
+      "subject": "Re: Gift packaging order - requirements",
+      "body": "Hi Emma, quantity 1,000 is confirmed. The boxes are USD 2.40 each. They will be ready for collection in Shanghai on 20 November 2026. Please see the quotation text below."
+    },
+    {
+      "id": "m3",
+      "source": "fixture",
+      "from_role": "seller",
+      "sent_at": "2026-10-24T09:01:00Z",
+      "subject": "Quotation Q-001",
+      "body": "Quotation Q-001. Product: custom gift boxes based on sample v1. Quantity: 1,000. Unit price: USD 2.40 per box. Boxes subtotal: USD 2,400. Shipping charges, payment terms and the acceptance process will be agreed separately."
+    }
+  ],
+  "expected_issues": [
+    {
+      "id": "delivery_milestone",
+      "kind": "conflict",
+      "priority": "high",
+      "title_zh": "到货与提货里程碑未对齐",
+      "evidence": [
+        {"message_id": "m1", "quote": "delivered to our London warehouse by 20 November 2026"},
+        {"message_id": "m2", "quote": "ready for collection in Shanghai on 20 November 2026"}
+      ],
+      "expected_behavior_zh": "日期相同但地点和里程碑不同。未确认伦敦到货期限，不能断言一定延期。"
+    },
+    {
+      "id": "sample_version",
+      "kind": "conflict",
+      "priority": "high",
+      "title_zh": "样品版本不一致",
+      "evidence": [
+        {"message_id": "m1", "quote": "based on sample v2"},
+        {"message_id": "m3", "quote": "based on sample v1"}
+      ],
+      "expected_behavior_zh": "请求确认版本，不自动选 v2。"
+    },
+    {
+      "id": "inserts_scope",
+      "kind": "missing",
+      "priority": "high",
+      "title_zh": "内托是否包含及费用未确认",
+      "evidence": [
+        {"message_id": "m1", "quote": "including the protective inserts"},
+        {"message_id": "m2", "quote": "The boxes are USD 2.40 each."}
+      ],
+      "expected_behavior_zh": "买方提出内托，卖方只对盒子报价，不能假设报价包含或排除内托。"
+    }
+  ],
+  "secondary_open_items": ["Shipping charges", "Payment terms", "Acceptance process"],
+  "draft_example": {
+    "from_role": "seller",
+    "to_role": "buyer",
+    "requires_user_confirmation": true,
+    "subject": "Please confirm three details before order confirmation - DEMO-001",
+    "body": "Hi Emma, before we confirm the order, could we align on three points?\n\n1. Your request specifies delivery to London by 20 November, while our current schedule states collection in Shanghai on that date. We need to align on the required milestone and delivery commitment.\n2. Your request refers to sample v2, while quotation Q-001 lists v1. Please confirm which sample should apply.\n3. You requested protective inserts. Their inclusion and price are not yet confirmed in our quotation. Please confirm the required scope so we can provide an updated offer.\n\nWe will also agree shipping charges, payment terms and acceptance separately. These questions do not change the order terms until both sides confirm."
+  },
+  "reply_sequence": [
+    {
+      "id": "m4",
+      "source": "fixture",
+      "from_role": "buyer",
+      "sent_at": "2026-10-24T10:00:00Z",
+      "body": "Please use sample v2. I still need confirmation of delivery to London and a price for the inserts.",
+      "expected_state_zh": "买方再次明确 v2；仍等待卖方修正报价并接受。交付和内托保持未确认。"
+    },
+    {
+      "id": "m5",
+      "source": "fixture",
+      "from_role": "seller",
+      "sent_at": "2026-10-24T10:30:00Z",
+      "body": "We confirm sample v2; Q-001 listed v1 in error. Our updated offer is 1,000 sets, each including one box and one protective insert, at USD 2.60 per set, goods subtotal USD 2,600. We commit to delivery at LONDON-DEMO-ADDRESS by 20 November 2026. Shipping is an additional USD 300, so the order total is USD 2,900. Payment: 30% deposit and 70% before dispatch. Acceptance: quantity and visible condition checked within 3 days of receipt; notify us with photos of any shortage or visible damage so we can agree a remedy. Please confirm acceptance of this updated offer.",
+      "expected_state_zh": "卖方已修正版本并提出整套价格与交付承诺，仍需买方接受更新条件。新增运输费、付款和验收提议不能自动确认。"
+    },
+    {
+      "id": "m6",
+      "source": "fixture",
+      "from_role": "buyer",
+      "sent_at": "2026-10-24T11:00:00Z",
+      "body": "I accept your updated offer in the previous email: sample v2, 1,000 sets with protective inserts at USD 2.60 per set, goods subtotal USD 2,600 plus USD 300 shipping, total USD 2,900, delivery at LONDON-DEMO-ADDRESS by 20 November 2026, 30% deposit and 70% before dispatch, and the stated 3-day quantity and visible-condition check with photo notification and an agreed remedy for any shortage or visible damage. Please prepare a matching PI.",
+      "expected_state_zh": "双方关键条件已有明确提议与接受，生成约定摘要；下一步是准备一致的 PI。不能显示已付款、已发货或已履约。"
+    }
+  ],
+  "ambiguous_reply_variant": {
+    "id": "m-ambiguous",
+    "source": "fixture",
+    "from_role": "seller",
+    "body": "No worries, it should be fine. Let's proceed as discussed.",
+    "expected_state_zh": "没有明确回应版本、内托或到货承诺，三个问题均不能据此关闭。"
+  },
+  "reopen_variant": {
+    "id": "m-reopen",
+    "source": "fixture",
+    "from_role": "seller",
+    "body": "Update after confirmation: sample v2 materials are unavailable. We propose substituting sample v1. Other terms remain unchanged, subject to your approval.",
+    "expected_state_zh": "重新打开样品版本问题，标记替代方案等待买方批准；不能继续把 v2 标为当前无争议约定，也不能自动接受 v1。"
+  },
+  "expected_final_summary": {
+    "agreement_status": "key_terms_confirmed",
+    "fulfillment_status": "not_started_or_unknown",
+    "sample": "v2",
+    "quantity_sets": 1000,
+    "scope": "one box and one protective insert per set",
+    "currency": "USD",
+    "unit_price_per_set": 2.6,
+    "goods_subtotal": 2600,
+    "shipping_charge": 300,
+    "order_total": 2900,
+    "delivery_milestone": "delivery at LONDON-DEMO-ADDRESS",
+    "delivery_deadline_as_agreed": "20 November 2026; exact cutoff time not specified",
+    "payment": "30% deposit, 70% before dispatch",
+    "acceptance": "3-day quantity and visible-condition check; photo notification; remedy to be agreed if a shortage or visible damage occurs",
+    "next_action": "Seller prepares a PI matching the accepted offer.",
+    "notes": "精确时间未约定。约定摘要不构成已实际履约的证明；未约定的细节不自动补写。"
+  }
+}

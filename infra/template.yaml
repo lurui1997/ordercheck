@@ -1,0 +1,319 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  OrderCheck minimal AWS CDS stack — SES inbound (S3) + event forwarders,
+  DynamoDB orders table, IAM for Bedrock/SES/S3/DynamoDB.
+  Reviewable IaC for judges; local `sam deploy` is optional.
+
+Metadata:
+  OrderCheck:
+    AppMapping:
+      inbound: POST /api/aws/inbound → lib/aws/inbound.ts
+      sesEvents: POST /api/aws/ses-events → lib/aws/ses-events.ts
+      ordersTable: ORDERS_TABLE_NAME → lib/aws/repository.ts DynamoOrderRepository
+      rawBucket: RAW_EMAIL_BUCKET → S3 GetObject in lib/aws/inbound.ts
+      bedrock: BEDROCK_MODEL_ID + AWS_REGION → lib/aws/bedrock.ts
+      sesSend: SES_FROM_ADDRESS → lib/aws/ses.ts
+
+Parameters:
+  Domain:
+    Type: String
+    Description: Inbound mail domain (INBOUND_DOMAIN). Must be SES-verified separately.
+    Default: mail.example.com
+  FromAddress:
+    Type: String
+    Description: Verified SES From address (SES_FROM_ADDRESS).
+    Default: orders@mail.example.com
+  AppBaseUrl:
+    Type: String
+    Description: Deployed OrderCheck base URL (no trailing slash), e.g. https://ordercheck.vercel.app
+  WebhookSecret:
+    Type: String
+    NoEcho: true
+    Description: Shared secret for INBOUND_WEBHOOK_SECRET (Bearer / x-ordercheck-secret).
+    MinLength: 16
+  ProjectName:
+    Type: String
+    Default: ordercheck
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Model id the app will call via Converse (BEDROCK_MODEL_ID).
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 256
+    Architectures:
+      - arm64
+
+Resources:
+  ###########################################################################
+  # DynamoDB — single-table order JSON (pk = orderId)
+  ###########################################################################
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-orders"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: app
+          Value: ordercheck
+
+  ###########################################################################
+  # S3 — raw inbound MIME (encrypted, block public access)
+  ###########################################################################
+  RawEmailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-raw-email-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireRawMail
+            Status: Enabled
+            ExpirationInDays: 90
+
+  RawEmailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RawEmailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSESPuts
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${RawEmailBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt RawEmailBucket.Arn
+              - !Sub "${RawEmailBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  ###########################################################################
+  # SNS — SES configuration-set events → Lambda forwarder
+  ###########################################################################
+  SesEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-ses-events"
+      DisplayName: OrderCheck SES events
+
+  SesConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub "${ProjectName}-outbound"
+
+  SesEventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref SesConfigurationSet
+      EventDestination:
+        Name: SnsDeliveryEvents
+        Enabled: true
+        MatchingEventTypes:
+          - send
+          - reject
+          - bounce
+          - complaint
+          - delivery
+        SnsDestination:
+          TopicARN: !Ref SesEventsTopic
+
+  ###########################################################################
+  # SES receipt rule set (conceptual inbound path)
+  # Domain MX + identity verification are out-of-band prerequisites.
+  ###########################################################################
+  ReceiptRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: !Sub "${ProjectName}-inbound"
+
+  InboundReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn:
+      - RawEmailBucketPolicy
+    Properties:
+      RuleSetName: !Ref ReceiptRuleSet
+      Rule:
+        Name: !Sub "${ProjectName}-store-and-notify"
+        Enabled: true
+        ScanEnabled: true
+        Recipients:
+          - !Ref Domain
+        Actions:
+          # Durable path: store MIME, then S3 ObjectCreated triggers InboundForwarderFunction.
+          - S3Action:
+              BucketName: !Ref RawEmailBucket
+              ObjectKeyPrefix: inbound/
+
+  ###########################################################################
+  # Lambda — S3 ObjectCreated → POST /api/aws/inbound
+  ###########################################################################
+  InboundForwarderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-inbound-forwarder"
+      CodeUri: src/
+      Handler: inbound_forwarder.handler
+      Description: Forwards SES/S3 inbound mail metadata to OrderCheck Vercel API
+      Environment:
+        Variables:
+          APP_BASE_URL: !Ref AppBaseUrl
+          WEBHOOK_SECRET: !Ref WebhookSecret
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${RawEmailBucket.Arn}/*"
+      Events:
+        RawEmailCreated:
+          Type: S3
+          Properties:
+            Bucket: !Ref RawEmailBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: inbound/
+
+  ###########################################################################
+  # Lambda — SNS SES events → POST /api/aws/ses-events
+  ###########################################################################
+  SesEventsForwarderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-ses-events-forwarder"
+      CodeUri: src/
+      Handler: ses_events_forwarder.handler
+      Description: Forwards SES SNS events to OrderCheck delivery status API
+      Environment:
+        Variables:
+          APP_BASE_URL: !Ref AppBaseUrl
+          WEBHOOK_SECRET: !Ref WebhookSecret
+      Events:
+        FromSns:
+          Type: SNS
+          Properties:
+            Topic: !Ref SesEventsTopic
+
+  ###########################################################################
+  # IAM — runtime role the Vercel/Next.js app (or a dedicated user) can assume
+  # for Bedrock Converse, SES SendEmail, S3 GetObject, DynamoDB CRUD.
+  ###########################################################################
+  OrderCheckAppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-app-runtime"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Replace Principal with your deploy identity / OIDC trust as needed.
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Sub "${ProjectName}-vercel"
+      Policies:
+        - PolicyName: OrderCheckCdsRuntime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BedrockConverse
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource: "*"
+              - Sid: SesSend
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Ref FromAddress
+              - Sid: S3GetRawMail
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${RawEmailBucket.Arn}/*"
+              - Sid: DynamoOrdersCrud
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt OrdersTable.Arn
+
+Outputs:
+  OrdersTableName:
+    Description: Set Vercel env ORDERS_TABLE_NAME to this value
+    Value: !Ref OrdersTable
+  RawEmailBucketName:
+    Description: Set Vercel env RAW_EMAIL_BUCKET to this value
+    Value: !Ref RawEmailBucket
+  SesFromAddress:
+    Description: Set Vercel env SES_FROM_ADDRESS (must match verified identity)
+    Value: !Ref FromAddress
+  InboundDomain:
+    Description: Set Vercel env INBOUND_DOMAIN
+    Value: !Ref Domain
+  SesConfigurationSetName:
+    Description: Set Vercel env SES_CONFIGURATION_SET
+    Value: !Ref SesConfigurationSet
+  WebhookSecretHint:
+    Description: Set Vercel env INBOUND_WEBHOOK_SECRET to the WebhookSecret parameter you passed
+    Value: "(use the NoEcho parameter value — not exported)"
+  AppBaseUrlConfigured:
+    Description: AppBaseUrl wired into Lambda forwarders
+    Value: !Ref AppBaseUrl
+  BedrockModelIdHint:
+    Description: Set Vercel env BEDROCK_MODEL_ID
+    Value: !Ref BedrockModelId
+  AppRuntimeRoleArn:
+    Description: Optional role for app credentials (sts:AssumeRole) with CDS permissions
+    Value: !GetAtt OrderCheckAppRole.Arn
+  ReceiptRuleSetName:
+    Description: Activate with `aws ses set-active-receipt-rule-set --rule-set-name …` after domain MX is ready
+    Value: !Ref ReceiptRuleSet
