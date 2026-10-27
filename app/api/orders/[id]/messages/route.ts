@@ -10,7 +10,13 @@ function isRole(value: unknown): value is Role {
 }
 
 function isSource(value: unknown): value is MessageSource {
-  return value === "fixture" || value === "manual" || value === "ses_inbound" || value === "demo_outbound";
+  return (
+    value === "fixture" ||
+    value === "manual" ||
+    value === "ses_inbound" ||
+    value === "email_inbound" ||
+    value === "demo_outbound"
+  );
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -28,8 +34,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (typeof candidate.id !== "string" || typeof candidate.body !== "string" || !isRole(candidate.from_role) || !isSource(candidate.source)) {
     return jsonError(400, "invalid_message", "消息需要 id、body、from_role 和 source。");
   }
-  if (candidate.source === "ses_inbound" || candidate.source === "demo_outbound") {
-    return jsonError(400, "source_not_allowed", "这个接口不接受 SES 收件或样例外发。入站邮件只能由 AWS 事件写入。");
+  if (candidate.source === "ses_inbound" || candidate.source === "email_inbound" || candidate.source === "demo_outbound") {
+    return jsonError(400, "source_not_allowed", "这个接口不接受 SES 收件、邮件入站或样例外发。入站邮件只能由入站接口写入。");
   }
 
   const message: Message = {

@@ -584,18 +584,22 @@ export function reviewOrder(order: Order): EngineResult {
 export function applyReply(
   order: Order,
   message: Message,
-  options?: { allowSesInbound?: boolean },
+  options?: { allowSesInbound?: boolean; allowEmailInbound?: boolean },
 ): EngineResult {
   if (!order.reviewed) return fail(order, "请先开始核对，再录入回复。");
   if (!message.body.trim()) return fail(order, "回复正文是空的。");
   if (message.source === "ses_inbound" && !options?.allowSesInbound) {
     return fail(order, "页面不能把内容标成 SES 收件。入站邮件只能由 AWS 收件事件写入。");
   }
-  if (
-    message.source !== "fixture" &&
-    message.source !== "manual" &&
-    !(message.source === "ses_inbound" && options?.allowSesInbound)
-  ) {
+  if (message.source === "email_inbound" && !options?.allowEmailInbound) {
+    return fail(order, "页面不能把内容标成邮件入站。入站邮件只能由入站接口写入。");
+  }
+  const allowed =
+    message.source === "fixture" ||
+    message.source === "manual" ||
+    (message.source === "ses_inbound" && options?.allowSesInbound) ||
+    (message.source === "email_inbound" && options?.allowEmailInbound);
+  if (!allowed) {
     return fail(order, "这条回复的来源标签不受支持。");
   }
   if (order.messages.some((item) => item.id === message.id)) {
@@ -605,9 +609,11 @@ export function applyReply(
   const notice =
     message.source === "ses_inbound"
       ? "已按 SES 入站邮件更新相关事项。"
-      : message.source === "fixture"
-        ? "已按样例回放更新相关事项，这不是 SES 收件。"
-        : "已按手工录入更新相关事项，这不是 SES 收件。";
+      : message.source === "email_inbound"
+        ? "已按入站邮件更新相关事项。这不是 SES 收件。"
+        : message.source === "fixture"
+          ? "已按样例回放更新相关事项，这不是 SES 收件。"
+          : "已按手工录入更新相关事项，这不是 SES 收件。";
   return done(recompute(next, message), notice);
 }
 
@@ -662,8 +668,8 @@ export function recordOutbound(
     body: string;
     issueIds: string[];
     sent_at?: string;
-    /** When SES accepted the message — never invent delivered. */
-    submit?: { messageId: string; from?: string };
+    /** When a transport accepted the message — never invent delivered. */
+    submit?: { messageId: string; from?: string; provider?: "ses" | "smtp" };
   },
 ): EngineResult {
   if (!order.reviewed) return fail(order, "请先开始核对，再记录确认邮件。");
@@ -683,12 +689,16 @@ export function recordOutbound(
 
   const createdAt = input.sent_at ?? order.reviewed_at ?? order.messages.at(-1)?.sent_at ?? "2026-10-24T09:30:00Z";
   const serial = order.outbound.length + 1;
-  const submitted = Boolean(input.submit?.messageId);
+  const provider = input.submit?.messageId ? (input.submit.provider ?? "ses") : undefined;
+  const submitted = Boolean(provider);
   const messageId = submitted ? input.submit!.messageId : `demo-out-${serial}`;
   const fromAddress = input.submit?.from?.trim() || order.seller.email;
-  const historyReason = submitted
-    ? "卖方确认并通过 Amazon SES 提交发送。状态是提交成功，不是已投递。"
-    : "卖方确认记录这封询问。样例模式没有调用 SES，不能视为已提交或已投递。";
+  const historyReason =
+    provider === "smtp"
+      ? "卖方确认并通过 SMTP 提交发送。状态是提交成功，不是已投递。"
+      : provider === "ses"
+        ? "卖方确认并通过 Amazon SES 提交发送。状态是提交成功，不是已投递。"
+        : "卖方确认记录这封询问。样例模式没有调用 SMTP，也没有调用 SES，不能视为已提交或已投递。";
   const issues = order.issues.map((issue) => {
     if (!input.issueIds.includes(issue.issue_id)) return issue;
     if (issue.status !== "unconfirmed" && issue.status !== "reopened") return issue;
@@ -722,13 +732,17 @@ export function recordOutbound(
         subject: input.subject.trim(),
         body: input.body,
         created_at: createdAt,
-        mode: submitted ? "aws" : "demo",
+        mode: provider === "ses" ? "aws" : "demo",
         delivery_status: submitted ? "submit_succeeded" : "recorded_not_sent",
-        note: submitted
-          ? `Amazon SES 已接受提交（MessageId: ${messageId}）。这不是已投递。`
-          : "样例模式只记录外发，没有调用 Amazon SES，不能视为已提交或已投递。",
+        note:
+          provider === "smtp"
+            ? `SMTP 已接受提交（MessageId: ${messageId}）。这不是已投递。`
+            : provider === "ses"
+              ? `Amazon SES 已接受提交（MessageId: ${messageId}）。这不是已投递。`
+              : "样例模式只记录外发，没有调用 SMTP，也没有调用 Amazon SES，不能视为已提交或已投递。",
         issue_ids: input.issueIds,
         provider_message_id: submitted ? messageId : undefined,
+        transport: provider,
       },
     ],
     messages: [

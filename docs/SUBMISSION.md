@@ -8,11 +8,11 @@ Use this as the Devpost / judge packet checklist.
 - [x] **LICENSE** — MIT, Copyright 2026 `luyanqi` / OrderCheck Contributors (`LICENSE`)
 - [x] **Architecture** — `docs/ARCHITECTURE.md` + deployable IaC in [`infra/`](../infra/) (SAM)
 - [x] **CDS runtime evidence** — `docs/CDS_RUNTIME.md` + `lib/aws/sdk-surface.test.ts`
-- [x] **Honest AI labeling** — `REVIEW_ENGINE` / `draftEngine`: `bedrock` | `ai_gateway` | `deterministic`
+- [x] **Honest AI labeling** — `REVIEW_ENGINE` / `draftEngine`: `deepseek` | `ollama` | `ai_gateway` | `deterministic` | `bedrock` (bedrock only when explicitly selected)
 - [ ] **Demo video** — record workspace DEMO-001 loop + optional health/engine screenshot (attach on Devpost)
 - [ ] **ACE / team profile** — complete on Devpost as required by the hackathon
 - [x] **Deployed URL** — https://ordercheck-lurui1997s-projects.vercel.app (alias); `GET /api/health`
-- [x] **Health** — `/api/health` exposes mode, `reviewEngine`, bedrock/ses/dynamo/s3/gateway/inbound flags, `missing[]`
+- [x] **Health** — `/api/health` exposes mode, `reviewEngine`, bedrock/deepseek/ollama/ses/sesLive/smtp/dynamo/s3/objectStore/gateway/inbound flags, `persistence`, `missing[]`
 
 ## Problem
 
@@ -43,7 +43,7 @@ account-resource prerequisites). Runtime SDK map: [CDS_RUNTIME.md](./CDS_RUNTIME
 
 | Service | Code | Runtime |
 |---|---|---|
-| Bedrock Runtime Converse + tool | `lib/aws/bedrock.ts`, `lib/review/draft-model.ts` | When `REVIEW_ENGINE=bedrock` or AWS mode default + region/model |
+| Bedrock Runtime Converse + tool | `lib/aws/bedrock.ts`, `lib/review/draft-model.ts` | Only when `REVIEW_ENGINE=bedrock` plus region/model. Default auto path is DeepSeek / Ollama / gateway / deterministic ([OSS_RUNTIME.md](./OSS_RUNTIME.md)) |
 | SES SendEmail | `lib/aws/ses.ts` | When `AWS_MODE` + `SES_FROM_ADDRESS` + `AWS_REGION` |
 | SES inbound via S3 | `lib/aws/inbound.ts` + `infra/` | Lambda or `POST /api/aws/inbound` with secret |
 | SES delivery events | `lib/aws/ses-events.ts` + `infra/` | `POST /api/aws/ses-events` with secret |
@@ -54,8 +54,7 @@ account-resource prerequisites). Runtime SDK map: [CDS_RUNTIME.md](./CDS_RUNTIME
 
 1. Open the production URL → load **DEMO-001** → **开始核对** (deterministic or Gateway
    depending on env) → inspect quote-backed issues.
-2. Call `GET /api/health` — see `reviewEngine`, `bedrock`/`ses`/`dynamo`/`s3`/`gateway`/
-   `inbound` booleans and `missing` list (no secrets).
+2. Call `GET /api/health` — see `reviewEngine`, `bedrock`/`deepseek`/`ollama`/`ses`/`sesLive`/`smtp`/`dynamo`/`s3`/`objectStore`/`gateway`/`inbound`/`persistence` and `missing` (no secrets).
 3. With Gateway or Bedrock configured: review again and screenshot the UI line
    **引擎 + request id / tokens** under 待确认事项; generate confirmation email and
    note `draftEngine` under the draft modal when a model path was used.

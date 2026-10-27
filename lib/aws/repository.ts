@@ -1,6 +1,8 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { getRuntimeConfig } from "@/lib/aws/config";
+import { openPostgresRepository } from "@/lib/oss/postgres-repository";
+import { openSqliteRepository } from "@/lib/oss/sqlite-repository";
 import { getOrder, saveOrder } from "@/lib/store";
 import type { Order } from "@/lib/types";
 
@@ -79,10 +81,29 @@ export class DynamoOrderRepository implements OrderRepository {
   }
 }
 
-export function createOrderRepository(): OrderRepository {
-  const config = getRuntimeConfig();
-  if (config.mode === "aws" && config.dynamoConfigured) {
-    return new DynamoOrderRepository();
+type EnvLike = Record<string, string | undefined>;
+
+/**
+ * Postgres when DATABASE_URL is set; else SQLite when PERSISTENCE=sqlite;
+ * else DynamoDB on the legacy AWS path; else memory.
+ * Misconfigured explicit modes throw — they do not silently use memory.
+ */
+export function createOrderRepository(env: EnvLike = process.env): OrderRepository {
+  const config = getRuntimeConfig(env);
+  if (config.persistenceError) {
+    throw new Error(config.persistenceError);
+  }
+  if (config.persistence === "postgres") {
+    return openPostgresRepository(env.DATABASE_URL ?? "");
+  }
+  if (config.persistence === "sqlite") {
+    return openSqliteRepository(env.SQLITE_PATH?.trim() || ".data/orders.sqlite");
+  }
+  if (config.persistence === "dynamo") {
+    return new DynamoOrderRepository({
+      tableName: env.ORDERS_TABLE_NAME,
+      region: env.AWS_REGION,
+    });
   }
   return new MemoryOrderRepository();
 }

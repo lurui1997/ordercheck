@@ -1,6 +1,7 @@
 import { IntegrationError, reviewWithBedrock } from "@/lib/aws/bedrock";
 import { getRuntimeConfig, reviewEngineLabel } from "@/lib/aws/config";
 import { GatewayError, reviewWithGateway } from "@/lib/aws/gateway";
+import { ChatProviderError, reviewWithOpenAICompatible } from "@/lib/oss/openai-compatible";
 import { applyModelReview } from "@/lib/review/model-apply";
 import { reviewOrder } from "@/lib/review/engine";
 import type { Order, ReviewEngine, ReviewMeta, RuntimeConfig } from "@/lib/types";
@@ -26,8 +27,10 @@ export interface ReviewRunResult {
 type EnvLike = Record<string, string | undefined>;
 
 /**
- * Select and run the review engine. Never silently substitutes deterministic
- * results when Bedrock/Gateway was requested or required.
+ * Select and run the review engine.
+ * auto order is resolved in getRuntimeConfig: deepseek → ollama → gateway → deterministic.
+ * Bedrock runs only when REVIEW_ENGINE=bedrock.
+ * A selected model that fails does not fall through to another engine.
  */
 export async function runReview(
   order: Order,
@@ -36,6 +39,49 @@ export async function runReview(
 ): Promise<ReviewRunResult> {
   const engine = config.reviewEngine;
   const reviewedAt = new Date().toISOString();
+
+  if (config.reviewEngineError) {
+    throw new ReviewOrchestrationError("review_engine_invalid", config.reviewEngineError, "deterministic");
+  }
+
+  if (engine === "deepseek" || engine === "ollama") {
+    const configured = engine === "deepseek" ? config.deepseekConfigured : config.ollamaConfigured;
+    if (!configured) {
+      throw new ReviewOrchestrationError(
+        `${engine}_not_configured`,
+        engine === "deepseek"
+          ? "需要 DeepSeek，但缺少 DEEPSEEK_API_KEY。没有调用模型，也没有用规则引擎冒充。"
+          : "需要 Ollama，但缺少 OLLAMA_MODEL。没有调用模型，也没有用规则引擎冒充。",
+        engine,
+      );
+    }
+    try {
+      const chat = await reviewWithOpenAICompatible({ engine, order, env });
+      const applied = applyModelReview(order, chat.payload);
+      if (!applied.ok) {
+        throw new ReviewOrchestrationError(`${engine}_review_rejected`, applied.error, engine);
+      }
+      const meta: ReviewMeta = {
+        engine,
+        modelRequestId: chat.requestId,
+        usage: chat.usage,
+        reviewedAt,
+      };
+      return {
+        order: { ...applied.order, review_meta: meta },
+        engine,
+        notice: applied.notice ?? `核对引擎：${reviewEngineLabel(engine)}`,
+        meta,
+      };
+    } catch (error) {
+      if (error instanceof ReviewOrchestrationError) throw error;
+      if (error instanceof ChatProviderError) {
+        throw new ReviewOrchestrationError(error.code, error.message, engine);
+      }
+      const message = error instanceof Error ? error.message : `${engine} 调用失败。`;
+      throw new ReviewOrchestrationError(`${engine}_call_failed`, message, engine);
+    }
+  }
 
   if (engine === "bedrock") {
     if (!config.bedrockConfigured) {

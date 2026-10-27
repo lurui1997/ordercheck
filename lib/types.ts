@@ -2,7 +2,7 @@ export type AppMode = "demo" | "aws";
 
 export type Role = "buyer" | "seller";
 
-export type MessageSource = "fixture" | "manual" | "ses_inbound" | "demo_outbound";
+export type MessageSource = "fixture" | "manual" | "ses_inbound" | "email_inbound" | "demo_outbound";
 
 export type IssueKind = "missing" | "ambiguous" | "conflict";
 
@@ -111,12 +111,22 @@ export interface OutboundEmail {
   issue_ids: string[];
   /** SES MessageId when submit succeeded — used to match delivery/bounce/complaint events. */
   provider_message_id?: string;
+  /** Transport that accepted the message. Absent when the send was only recorded. */
+  transport?: "ses" | "smtp";
 }
 
 export interface ReviewMeta {
   engine: ReviewEngine;
   bedrockRequestId?: string;
   gatewayUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+  /** OpenAI-compatible request id (DeepSeek / Ollama). Never a Bedrock request id. */
+  modelRequestId?: string;
+  /** Token usage for DeepSeek / Ollama. Not gateway usage. */
+  usage?: {
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
@@ -212,7 +222,11 @@ export type EngineResult =
   | { ok: true; order: Order; notice?: string }
   | { ok: false; order: Order; error: string };
 
-export type ReviewEngine = "deterministic" | "bedrock" | "ai_gateway";
+export type ReviewEngine = "deterministic" | "bedrock" | "ai_gateway" | "deepseek" | "ollama";
+
+export type PersistenceKind = "postgres" | "sqlite" | "dynamo" | "memory";
+
+export type ObjectStoreKind = "minio" | "s3" | "disk" | "none";
 
 export interface RuntimeConfig {
   mode: AppMode;
@@ -220,11 +234,21 @@ export interface RuntimeConfig {
   missing: string[];
   bedrockConfigured: boolean;
   gatewayConfigured: boolean;
+  deepseekConfigured: boolean;
+  ollamaConfigured: boolean;
   sesConfigured: boolean;
   /** True only when AWS_MODE and SES_FROM_ADDRESS + AWS_REGION are set — real SendEmail path. */
   sesLive: boolean;
+  /** True when SMTP_HOST and SMTP_FROM are set. Does not probe the server. */
+  smtpConfigured: boolean;
   dynamoConfigured: boolean;
   s3Configured: boolean;
   inboundConfigured: boolean;
   reviewEngine: ReviewEngine;
+  /** Set when REVIEW_ENGINE is not a known value. Callers must fail closed. */
+  reviewEngineError?: string;
+  persistence: PersistenceKind;
+  /** Set when an explicit persistence mode is missing its connection settings. */
+  persistenceError?: string;
+  objectStore: ObjectStoreKind;
 }

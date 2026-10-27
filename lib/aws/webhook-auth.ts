@@ -4,7 +4,10 @@ import { jsonError } from "@/lib/http";
  * Protect Lambda/EventBridge forwarders. Without INBOUND_WEBHOOK_SECRET → 501.
  * Accept Authorization: Bearer … or x-ordercheck-secret.
  */
-export function requireInboundSecret(request: Request, env: NodeJS.ProcessEnv = process.env): Response | null {
+export function requireInboundSecret(
+  request: Request,
+  env: Record<string, string | undefined> = process.env,
+): Response | null {
   const secret = env.INBOUND_WEBHOOK_SECRET?.trim();
   if (!secret) {
     return jsonError(

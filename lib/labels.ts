@@ -33,6 +33,7 @@ export const SOURCE_LABEL: Record<MessageSource, string> = {
   fixture: "样例",
   manual: "手工录入",
   ses_inbound: "SES 收件",
+  email_inbound: "邮件入站",
   demo_outbound: "样例外发记录",
 };
 

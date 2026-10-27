@@ -1,5 +1,7 @@
 # CDS runtime evidence — AWS SDK call sites
 
+The **default recommended stack is open source** (DeepSeek or Ollama, SMTP, MinIO, Postgres or SQLite). See [OSS_RUNTIME.md](./OSS_RUNTIME.md). Bedrock, SES, DynamoDB, and S3 stay in the tree as an **optional legacy path for the CDS contest**. They run only when you opt in (`REVIEW_ENGINE=bedrock`, `AWS_MODE` plus SES settings, `ORDERS_TABLE_NAME` without `DATABASE_URL`). `REVIEW_ENGINE=auto` never selects Bedrock.
+
 Devpost / AWS CDS Agentic AI Hackathon entries **must demonstrate CDS at runtime**.
 This document maps each required AWS SDK package to the **source file and function**
 that constructs a client and issues a live API command. Adapters fail closed with
@@ -15,7 +17,7 @@ see [`infra/README.md`](../infra/README.md).
 | AWS SDK package | Runtime file | Entry | Command / API | When it runs |
 |---|---|---|---|---|
 | `@aws-sdk/client-ses` | `lib/aws/ses.ts` | `submitEmail` | `SESClient` + `SendEmailCommand` | `AWS_MODE` + `SES_FROM_ADDRESS` + `AWS_REGION`; called from `POST /api/orders/:id/send` |
-| `@aws-sdk/client-bedrock-runtime` | `lib/aws/bedrock.ts` | `reviewWithBedrock` | `BedrockRuntimeClient` + `ConverseCommand` (tool `submit_order_review`; optional 1 agent retry) | `REVIEW_ENGINE=bedrock` or AWS-mode default, with `AWS_REGION` + `BEDROCK_MODEL_ID`; `POST /api/orders/:id/review` via `lib/review/orchestrator.ts` |
+| `@aws-sdk/client-bedrock-runtime` | `lib/aws/bedrock.ts` | `reviewWithBedrock` | `BedrockRuntimeClient` + `ConverseCommand` (tool `submit_order_review`; optional 1 agent retry) | Only `REVIEW_ENGINE=bedrock`, with `AWS_REGION` + `BEDROCK_MODEL_ID`; `POST /api/orders/:id/review` via `lib/review/orchestrator.ts`. Not the auto default. |
 | `@aws-sdk/client-bedrock-runtime` | `lib/review/draft-model.ts` | `draftWithModel` → `draftWithBedrock` | `ConverseCommand` (tool `submit_confirmation_email_draft`) | Same Bedrock env; `POST /api/orders/:id/email-draft`. **On failure falls back to deterministic `buildDraft` and labels `draftEngine: deterministic` — never “bedrock”.** |
 | `@aws-sdk/client-s3` | `lib/aws/inbound.ts` | `handleInboundRecord` | `S3Client` + `GetObjectCommand` | Inbound path with bucket/key; `POST /api/aws/inbound` or Lambda forwarder in `infra/` |
 | `@aws-sdk/client-dynamodb` + `@aws-sdk/lib-dynamodb` | `lib/aws/repository.ts` | `DynamoOrderRepository.get` / `.save` | `DynamoDBDocumentClient` + `GetCommand` / `PutCommand` | When `ORDERS_TABLE_NAME` (+ `AWS_REGION`) set; selected by `createOrderRepository()` |

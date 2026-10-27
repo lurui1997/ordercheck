@@ -7,6 +7,7 @@ import {
 import { createGateway } from "@ai-sdk/gateway";
 import { generateText } from "ai";
 import { getRuntimeConfig } from "@/lib/aws/config";
+import { ChatProviderError, draftWithOpenAICompatible } from "@/lib/oss/openai-compatible";
 import { buildDraft } from "@/lib/review/draft";
 import type { EmailDraft, Order, ReviewEngine, RuntimeConfig } from "@/lib/types";
 
@@ -14,7 +15,7 @@ export type DraftEngine = ReviewEngine;
 
 export interface DraftWithModelResult {
   draft: EmailDraft;
-  /** Honest label: bedrock | ai_gateway | deterministic (never claim bedrock on fallback). */
+  /** Honest label. Fallback is always deterministic — never bedrock for a non-Bedrock draft. */
   draftEngine: DraftEngine;
   notice?: string;
 }
@@ -176,11 +177,21 @@ async function draftWithGateway(order: Order, issueIds: string[], env: EnvLike):
   return toEmailDraft(order, issueIds, fields.subject, fields.body);
 }
 
+async function draftWithChat(order: Order, issueIds: string[], env: EnvLike, engine: "deepseek" | "ollama"): Promise<EmailDraft> {
+  const fields = await draftWithOpenAICompatible({
+    engine,
+    order,
+    prompt: buildDraftPrompt(order, issueIds),
+    env,
+  });
+  return toEmailDraft(order, issueIds, fields.subject, fields.body);
+}
+
 /**
  * Optional LLM path for confirmation email drafts.
- * When REVIEW_ENGINE is bedrock/gateway and configured, tries the model;
- * on any failure falls back to deterministic buildDraft and labels draftEngine
- * as "deterministic" (never as bedrock).
+ * When a remote engine is selected and configured, tries that model.
+ * On any failure falls back to deterministic buildDraft and labels draftEngine
+ * as "deterministic" (never as bedrock, deepseek, or ollama).
  */
 export async function draftWithModel(
   order: Order,
@@ -200,6 +211,25 @@ export async function draftWithModel(
         draft: buildDraft(order, issueIds),
         draftEngine: "deterministic",
         notice: `Bedrock draft failed (${message}); fell back to deterministic buildDraft.`,
+      };
+    }
+  }
+
+  if ((engine === "deepseek" || engine === "ollama") && (engine === "deepseek" ? config.deepseekConfigured : config.ollamaConfigured)) {
+    try {
+      const draft = await draftWithChat(order, issueIds, env, engine);
+      const name = engine === "deepseek" ? "DeepSeek" : "Ollama";
+      return {
+        draft,
+        draftEngine: engine,
+        notice: `Confirmation draft generated with ${name} (not Bedrock).`,
+      };
+    } catch (error) {
+      const message = error instanceof ChatProviderError ? error.message : error instanceof Error ? error.message : `${engine}_draft_failed`;
+      return {
+        draft: buildDraft(order, issueIds),
+        draftEngine: "deterministic",
+        notice: `${engine} draft failed (${message}); fell back to deterministic buildDraft.`,
       };
     }
   }
