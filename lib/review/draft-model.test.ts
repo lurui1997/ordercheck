@@ -4,6 +4,11 @@ import { reviewOrder } from "@/lib/review/engine";
 
 const send = vi.fn();
 
+vi.mock("@/lib/deepseek", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/deepseek")>("@/lib/deepseek");
+  return { ...actual, draftWithDeepseek: vi.fn() };
+});
+
 vi.mock("@aws-sdk/client-bedrock-runtime", () => {
   class BedrockRuntimeClient {
     send = send;
@@ -17,6 +22,7 @@ vi.mock("@aws-sdk/client-bedrock-runtime", () => {
   return { BedrockRuntimeClient, ConverseCommand };
 });
 
+import { DeepSeekError, draftWithDeepseek } from "@/lib/deepseek";
 import { draftWithModel } from "@/lib/review/draft-model";
 
 function reviewedOrder() {
@@ -29,6 +35,7 @@ function reviewedOrder() {
 describe("draftWithModel", () => {
   afterEach(() => {
     send.mockReset();
+    vi.mocked(draftWithDeepseek).mockReset();
   });
 
   it("uses deterministic engine by default and labels honestly", async () => {
@@ -91,5 +98,34 @@ describe("draftWithModel", () => {
     expect(result.draft.subject).toContain("DEMO-001");
     expect(result.draft.body).toMatch(/London delivery/i);
     expect(send).toHaveBeenCalled();
+  });
+
+  it("labels deepseek drafts as deepseek", async () => {
+    vi.mocked(draftWithDeepseek).mockResolvedValue({
+      from: "seller@example.com",
+      to: "buyer@example.com",
+      subject: "Please confirm",
+      body: "Please confirm sample v2.",
+      issue_ids: ["sample_version"],
+    });
+    const order = reviewedOrder();
+    const result = await draftWithModel(order, ["sample_version"], {
+      REVIEW_ENGINE: "deepseek",
+      DEEPSEEK_API_KEY: "sk-test",
+    });
+    expect(result.draftEngine).toBe("deepseek");
+    expect(result.notice).toMatch(/DeepSeek/);
+    expect(result.notice).toMatch(/not Bedrock/i);
+  });
+
+  it("throws on deepseek draft failure instead of returning a deterministic draft", async () => {
+    vi.mocked(draftWithDeepseek).mockRejectedValue(new DeepSeekError("deepseek_call_failed", "nope"));
+    const order = reviewedOrder();
+    await expect(
+      draftWithModel(order, ["sample_version"], {
+        REVIEW_ENGINE: "deepseek",
+        DEEPSEEK_API_KEY: "sk-test",
+      }),
+    ).rejects.toMatchObject({ code: "deepseek_call_failed" });
   });
 });

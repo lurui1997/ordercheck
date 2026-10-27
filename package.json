@@ -7,10 +7,12 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 43123",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "vitest run lib/eval/score.test.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^3.0.221",
+    "@ai-sdk/openai": "^3.0.132",
     "@aws-sdk/client-bedrock-runtime": "^3.1156.0",
     "@aws-sdk/client-dynamodb": "^3.1156.0",
     "@aws-sdk/client-s3": "^3.1156.0",

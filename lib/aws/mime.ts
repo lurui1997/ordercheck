@@ -5,6 +5,7 @@ export interface ParsedMime {
   body: string;
   messageId: string;
   replyTo: string;
+  date: string;
 }
 
 function decodeHeaderValue(value: string): string {
@@ -94,6 +95,7 @@ export function parseSimpleMime(raw: string): ParsedMime {
     body: extractTextPlain(bodyBlock, contentType),
     messageId,
     replyTo: splitAddresses(headers.get("reply-to"))[0] ?? "",
+    date: headers.get("date") ?? "",
   };
 }
 

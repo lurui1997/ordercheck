@@ -2,7 +2,9 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { getRuntimeConfig } from "@/lib/aws/config";
 import { getOrder, saveOrder } from "@/lib/store";
-import type { Order } from "@/lib/types";
+import type { Order, PersistenceKind } from "@/lib/types";
+
+type EnvLike = Record<string, string | undefined>;
 
 export interface OrderRepository {
   get(id: string): Promise<Order | null>;
@@ -27,8 +29,10 @@ export interface DynamoOrderRepositoryOptions {
 }
 
 /**
- * Single-table order store: pk = orderId, attribute `order` holds the full Order JSON.
- * Selected only when ORDERS_TABLE_NAME is set; failures surface — no silent Memory fallback.
+ * Single-table order store: pk = orderId, attribute `order` holds the full Order JSON
+ * (messages, issues, facts, outbound). There is no second table to invent.
+ * Selected only when table + region + credentials are all set.
+ * SDK errors propagate — callers must not write the same snapshot to memory and call it durable.
  */
 export class DynamoOrderRepository implements OrderRepository {
   private readonly tableName: string;
@@ -79,10 +83,21 @@ export class DynamoOrderRepository implements OrderRepository {
   }
 }
 
-export function createOrderRepository(): OrderRepository {
-  const config = getRuntimeConfig();
-  if (config.mode === "aws" && config.dynamoConfigured) {
-    return new DynamoOrderRepository();
+/** Which store will be constructed. Does not open a client. */
+export function selectOrderRepositoryKind(env: EnvLike = process.env): PersistenceKind {
+  return getRuntimeConfig(env).persistence;
+}
+
+/**
+ * DynamoDB when `isDynamoLive` (table + region + credentials). Otherwise the
+ * in-memory demo map. Does not catch Dynamo failures and retry against memory.
+ */
+export function createOrderRepository(env: EnvLike = process.env): OrderRepository {
+  if (selectOrderRepositoryKind(env) === "dynamodb") {
+    return new DynamoOrderRepository({
+      tableName: env.ORDERS_TABLE_NAME,
+      region: env.AWS_REGION,
+    });
   }
   return new MemoryOrderRepository();
 }
