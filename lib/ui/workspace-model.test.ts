@@ -10,7 +10,9 @@ import {
   enginePresentation,
   filterIssues,
   highlightQuotes,
+  mailPresentation,
   nextStepHint,
+  objectStorePresentation,
   persistencePresentation,
   pickInitialIssue,
   readApiError,
@@ -88,7 +90,7 @@ describe("workspace view model", () => {
 
     expect(enginePresentation("deterministic").detail).not.toMatch(/这次核对走 Amazon Bedrock/);
     expect(enginePresentation("deterministic").label).toBe("规则引擎");
-    expect(enginePresentation("deterministic").detail).toMatch(/没有调用 Amazon Bedrock、AI Gateway 或 DeepSeek/);
+    expect(enginePresentation("deterministic").detail).toMatch(/没有调用 Amazon Bedrock、AI Gateway、DeepSeek 或 Ollama/);
     expect(enginePresentation("ai_gateway").detail).toMatch(/不是 Amazon Bedrock/);
     expect(enginePresentation("bedrock").code).toBe("bedrock");
     const deepseek = enginePresentation("deepseek");
@@ -97,8 +99,19 @@ describe("workspace view model", () => {
     expect(deepseek.code).toBe("deepseek");
     expect(deepseek.detail).toMatch(/不是 Amazon Bedrock/);
     expect(deepseek.detail).toMatch(/也不是规则引擎/);
+    const ollama = enginePresentation("ollama");
+    expect(ollama.label).toBe("Ollama");
+    expect(ollama.label).not.toBe("规则引擎");
+    expect(ollama.detail).toMatch(/不是 Amazon Bedrock/);
     expect(persistencePresentation(demoConfig).label).toBe("内存");
     expect(persistencePresentation({ persistence: "dynamodb" }).label).toBe("DynamoDB");
+    expect(persistencePresentation({ persistence: "postgres" }).label).toBe("Postgres");
+    expect(persistencePresentation({ persistence: "sqlite" }).label).toBe("SQLite");
+    expect(objectStorePresentation("none").label).toBe("无");
+    expect(objectStorePresentation("minio").detail).toMatch(/不是 Amazon S3/);
+    expect(mailPresentation({ smtpConfigured: true, sesLive: true }).label).toBe("SMTP 真发信");
+    expect(mailPresentation({ smtpConfigured: false, sesLive: true }).transport).toBe("ses");
+    expect(mailPresentation({ smtpConfigured: false, sesLive: false }).label).toBe("仅记录");
     expect(sesPresentation({ sesLive: false }).label).toBe("SES 未发信");
     expect(statusTone("confirmed")).toBe("ok");
     expect(statusTone("unconfirmed")).toBe("danger");
@@ -129,9 +142,11 @@ describe("workspace view model", () => {
     });
     expect(ready.draft.disabled).toBe(false);
     expect(ready.record.disabled).toBe(false);
-    expect(sendAvailability({ mode: "demo", sesConfigured: false, sesLive: false }).ses.disabled).toBe(true);
-    expect(sendAvailability({ mode: "aws", sesConfigured: false, sesLive: false }).record.disabled).toBe(true);
-    expect(sendAvailability({ mode: "aws", sesConfigured: true, sesLive: true }).ses.disabled).toBe(false);
+    expect(sendAvailability({ mode: "demo", sesConfigured: false, sesLive: false, smtpConfigured: false }).live.disabled).toBe(true);
+    expect(sendAvailability({ mode: "aws", sesConfigured: false, sesLive: false, smtpConfigured: false }).record.disabled).toBe(true);
+    expect(sendAvailability({ mode: "aws", sesConfigured: true, sesLive: true, smtpConfigured: false }).live.disabled).toBe(false);
+    expect(sendAvailability({ mode: "aws", sesConfigured: true, sesLive: true, smtpConfigured: false }).transport).toBe("ses");
+    expect(sendAvailability({ mode: "demo", sesConfigured: false, sesLive: false, smtpConfigured: true }).transport).toBe("smtp");
   });
 
   it("keeps API error codes", () => {

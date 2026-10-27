@@ -20,12 +20,13 @@ export function EmailDialog({
   pendingSend,
   pendingNote,
   record,
-  ses,
+  live,
+  transport,
   onOpenChange,
   onToggleIssue,
   onChange,
   onRecord,
-  onSes,
+  onLive,
 }: {
   open: boolean;
   draft: EmailDraft | null;
@@ -33,22 +34,24 @@ export function EmailDialog({
   draftEngine: ReviewEngine | null;
   draftBusy: boolean;
   sendBusy: boolean;
-  pendingSend: "record" | "ses" | null;
+  pendingSend: "record" | "live" | null;
   pendingNote?: string;
   record: CommandAvailability;
-  ses: CommandAvailability;
+  live: CommandAvailability;
+  transport: "smtp" | "ses" | "recorded";
   onOpenChange: (open: boolean) => void;
   onToggleIssue: (issueId: string) => void;
   onChange: (draft: EmailDraft) => void;
   onRecord: () => void;
-  onSes: () => void;
+  onLive: () => void;
 }) {
   const engine = draftEngine ? enginePresentation(draftEngine) : null;
   const fieldsReady = Boolean(draft && draft.to.trim() && draft.subject.trim() && draft.body.trim() && draft.issue_ids.length > 0);
   const recordBlocked = record.disabled || !fieldsReady || sendBusy || draftBusy;
-  const sesBlocked = ses.disabled || !fieldsReady || sendBusy || draftBusy;
+  const liveBlocked = live.disabled || !fieldsReady || sendBusy || draftBusy;
   const recordReason = !fieldsReady ? "收件人、主题、正文和至少一项事项都不能为空。" : record.reason;
-  const sesReason = ses.reason ?? (!fieldsReady ? "收件人、主题、正文和至少一项事项都不能为空。" : null);
+  const liveReason = live.reason ?? (!fieldsReady ? "收件人、主题、正文和至少一项事项都不能为空。" : null);
+  const liveLabel = transport === "smtp" ? "确认 SMTP 发送" : transport === "ses" ? "确认 SES 发送" : "确认发送";
 
   return (
     <Modal
@@ -56,9 +59,11 @@ export function EmailDialog({
       onOpenChange={onOpenChange}
       title="确认邮件"
       description={
-        ses.disabled
-          ? "先改内容，再记录发送。当前不会调用 SES，也不会显示已投递。"
-          : "先改内容。SES 提交成功只表示已接受，不是已投递。仅记录则不提交 SES。"
+        transport === "smtp"
+          ? "先改内容。SMTP 提交成功只表示服务器接受，不是已投递。仅记录则不提交 SMTP。"
+          : transport === "ses"
+            ? "先改内容。SES 提交成功只表示已接受，不是已投递。仅记录则不提交 SES。"
+            : "先改内容，再记录发送。当前不会调用 SMTP 或 SES，也不会显示已投递。"
       }
       className="w-[min(840px,calc(100%-1.5rem))]"
     >
@@ -116,24 +121,26 @@ export function EmailDialog({
             />
           </div>
           <p className="rounded-md border border-amber-200 bg-attention-soft px-3 py-2 text-[13px] leading-5 text-attention">
-            {ses.disabled
-              ? "样例地址不能用于真实发信。确认后只把邮件记到这条订单里，投递状态保持未发送。"
-              : "将使用 SES_FROM_ADDRESS 提交。成功状态是已提交，不是已投递。"}
+            {transport === "smtp"
+              ? "将使用 SMTP_FROM 提交。成功状态是已提交，不是已投递。"
+              : transport === "ses"
+                ? "将使用 SES_FROM_ADDRESS 提交。成功状态是已提交，不是已投递。"
+                : "样例地址不能用于真实发信。确认后只把邮件记到这条订单里，投递状态保持未发送。"}
           </p>
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               返回
             </Button>
             <span title={recordBlocked ? (recordReason ?? undefined) : undefined}>
-              <Button variant={ses.disabled ? "default" : "outline"} aria-disabled={recordBlocked || undefined} onClick={() => !recordBlocked && onRecord()}>
+              <Button variant={live.disabled ? "default" : "outline"} aria-disabled={recordBlocked || undefined} onClick={() => !recordBlocked && onRecord()}>
                 {sendBusy && pendingSend === "record" ? <Spinner /> : null}
                 仅记录发送
               </Button>
             </span>
-            <span title={sesBlocked ? (sesReason ?? undefined) : undefined}>
-              <Button variant={ses.disabled ? "outline" : "default"} aria-disabled={sesBlocked || undefined} onClick={() => !sesBlocked && onSes()}>
-                {sendBusy && pendingSend === "ses" ? <Spinner /> : null}
-                确认 SES 发送
+            <span title={liveBlocked ? (liveReason ?? undefined) : undefined}>
+              <Button variant={live.disabled ? "outline" : "default"} aria-disabled={liveBlocked || undefined} onClick={() => !liveBlocked && onLive()}>
+                {sendBusy && pendingSend === "live" ? <Spinner /> : null}
+                {liveLabel}
               </Button>
             </span>
           </div>

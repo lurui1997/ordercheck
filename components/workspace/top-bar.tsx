@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { STAGE_LABEL } from "@/lib/labels";
-import { enginePresentation, liveEnginePresentation, persistencePresentation, selectionLabel, sesPresentation } from "@/lib/ui/workspace-model";
+import { enginePresentation, liveEnginePresentation, mailPresentation, objectStorePresentation, persistencePresentation, selectionLabel } from "@/lib/ui/workspace-model";
 import type { Order, RuntimeConfig } from "@/lib/types";
 
 export interface HealthChip {
@@ -9,8 +9,14 @@ export interface HealthChip {
   reviewEngine?: string;
   reviewEngineSelection?: string;
   liveEngine?: string | null;
+  reviewEngineError?: string;
   persistence?: string;
+  persistenceError?: string;
+  objectStore?: string;
   deepseek?: boolean;
+  ollama?: boolean;
+  smtp?: boolean;
+  sesLive?: boolean;
 }
 
 function healthTitleFor(health: HealthChip): string {
@@ -26,9 +32,15 @@ function healthTitleFor(health: HealthChip): string {
   if (health.reviewEngine) {
     reported.push(`核对 ${health.reviewEngine}${health.reviewEngineSelection ? ` ${health.reviewEngineSelection}` : ""}`);
   }
+  if (health.reviewEngineError) reported.push(health.reviewEngineError);
   if (health.liveEngine !== undefined) reported.push(`对照 ${health.liveEngine ?? "无"}`);
   if (health.persistence) reported.push(`存储 ${health.persistence}`);
+  if (health.persistenceError) reported.push(health.persistenceError);
+  if (health.objectStore) reported.push(`对象 ${health.objectStore}`);
   if (health.deepseek !== undefined) reported.push(`deepseek ${health.deepseek ? "已配置" : "未配置"}`);
+  if (health.ollama !== undefined) reported.push(`ollama ${health.ollama ? "已配置" : "未配置"}`);
+  if (health.smtp !== undefined) reported.push(`smtp ${health.smtp ? "已配置" : "未配置"}`);
+  if (health.sesLive !== undefined) reported.push(`ses ${health.sesLive ? "真发信" : "未发信"}`);
   return reported.length > 0 ? `${base} ${reported.join(" · ")}。` : base;
 }
 
@@ -37,7 +49,8 @@ export function TopBar({ config, order, health }: { config: RuntimeConfig; order
   const selection = selectionLabel(config.reviewEngineSelection);
   const live = liveEnginePresentation(config.liveEngine);
   const persistence = persistencePresentation(config);
-  const ses = sesPresentation(config);
+  const mail = mailPresentation(config);
+  const objectStore = objectStorePresentation(config.objectStore);
   const healthLabel = health.state === "loading" ? "检查中" : health.state === "ok" ? "正常" : health.state === "degraded" ? "缺配置" : "不可用";
   const healthTitle = healthTitleFor(health);
 
@@ -77,10 +90,10 @@ export function TopBar({ config, order, health }: { config: RuntimeConfig; order
             <Badge tone={config.mode === "aws" ? "attention" : "neutral"}>{config.modeLabel}</Badge>
           </li>
           <li>
-            <Badge tone={engine.code === "deterministic" ? "neutral" : "accent"} className="max-w-full">
-              <span title={`${engine.detail} 选择方式 ${selection}。`}>
-                核对 · {engine.label}
-                <span className="ml-1 font-mono font-normal text-[10px]">{engine.code}</span>
+            <Badge tone={config.reviewEngineError ? "danger" : engine.code === "deterministic" ? "neutral" : "accent"} className="max-w-full">
+              <span title={config.reviewEngineError ?? `${engine.detail} 选择方式 ${selection}。自动链是 DeepSeek，其次 Ollama，再次 AI Gateway，否则规则引擎。`}>
+                核对 · {config.reviewEngineError ? "无效" : engine.label}
+                <span className="ml-1 font-mono font-normal text-[10px]">{config.reviewEngineError ? "invalid" : engine.code}</span>
                 <span className="ml-1 font-mono font-normal text-[10px]">{selection}</span>
               </span>
             </Badge>
@@ -94,13 +107,18 @@ export function TopBar({ config, order, health }: { config: RuntimeConfig; order
             </Badge>
           </li>
           <li>
-            <Badge tone={config.persistence === "dynamodb" ? "attention" : "neutral"}>
+            <Badge tone={config.persistenceError ? "danger" : config.persistence === "memory" ? "neutral" : "attention"}>
               <span title={persistence.detail}>存储 · {persistence.label}</span>
             </Badge>
           </li>
           <li>
-            <Badge tone={config.sesLive ? "attention" : "neutral"}>
-              <span title={ses.detail}>{ses.label}</span>
+            <Badge tone={config.objectStore === "none" ? "neutral" : "accent"}>
+              <span title={objectStore.detail}>对象 · {objectStore.label}</span>
+            </Badge>
+          </li>
+          <li>
+            <Badge tone={mail.transport === "recorded" ? "neutral" : "attention"}>
+              <span title={mail.detail}>{mail.label}</span>
             </Badge>
           </li>
           <li>

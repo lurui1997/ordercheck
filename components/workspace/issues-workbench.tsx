@@ -83,8 +83,10 @@ export function IssuesWorkbench({
           引擎 {engine.label}
           <span className="ml-1 font-mono">{engine.code}</span>
           {meta?.bedrockRequestId ? ` · request id ${meta.bedrockRequestId}` : ""}
+          {meta?.modelRequestId ? ` · request id ${meta.modelRequestId}` : ""}
           {meta?.gatewayUsage?.totalTokens != null ? ` · gateway tokens ${meta.gatewayUsage.totalTokens}` : ""}
           {meta?.deepseekUsage?.totalTokens != null ? ` · deepseek tokens ${meta.deepseekUsage.totalTokens}` : ""}
+          {meta?.ollamaUsage?.totalTokens != null ? ` · ollama tokens ${meta.ollamaUsage.totalTokens}` : ""}
           {meta?.agentRetries ? ` · agent retry ${meta.agentRetries}` : ""}
         </p>
       ) : null}

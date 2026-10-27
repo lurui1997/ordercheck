@@ -6,6 +6,8 @@ import type {
   IssueStatus,
   Order,
   Priority,
+  ObjectStoreKind,
+  PersistenceKind,
   ReviewEngine,
   ReviewEngineSelection,
   RuntimeConfig,
@@ -215,11 +217,17 @@ export function enginePresentation(engine: ReviewEngine): EnginePresentation {
         label: "DeepSeek",
         detail: "核对走 DeepSeek。不是 Amazon Bedrock，也不是 AI Gateway，也不是规则引擎。",
       };
+    case "ollama":
+      return {
+        code: "ollama",
+        label: "Ollama",
+        detail: "核对走本机 Ollama。不是 Amazon Bedrock，也不是 DeepSeek，也不是 AI Gateway，也不是规则引擎。",
+      };
     case "deterministic":
       return {
         code: "deterministic",
         label: "规则引擎",
-        detail: "确定性规则引擎。这次核对没有调用 Amazon Bedrock、AI Gateway 或 DeepSeek。",
+        detail: "确定性规则引擎。这次核对没有调用 Amazon Bedrock、AI Gateway、DeepSeek 或 Ollama。",
       };
   }
 }
@@ -233,7 +241,7 @@ export function liveEnginePresentation(engine: ReviewEngine | null): { label: st
     return {
       label: "无",
       code: "none",
-      detail: "对照不会调用模型。没有可用的 AI Gateway、DeepSeek 或已具备凭证的 Bedrock。",
+      detail: "对照不会调用模型。自动链是 DeepSeek，其次 Ollama，再次 AI Gateway。Bedrock 只有显式选择并且具备凭证时才会出现。",
     };
   }
   const presented = enginePresentation(engine);
@@ -244,16 +252,63 @@ export function liveEnginePresentation(engine: ReviewEngine | null): { label: st
   };
 }
 
-export function persistencePresentation(config: Pick<RuntimeConfig, "persistence">): { label: string; detail: string } {
-  if (config.persistence === "dynamodb") {
+export function persistencePresentation(config: Pick<RuntimeConfig, "persistence" | "persistenceError">): { label: string; detail: string } {
+  const error = config.persistenceError ? ` ${config.persistenceError}` : "";
+  switch (config.persistence) {
+    case "postgres":
+      return { label: "Postgres", detail: `订单接口写入 Postgres。当前工作台副本仍保存在本机浏览器。${error}` };
+    case "sqlite":
+      return { label: "SQLite", detail: `订单接口写入 SQLite。当前工作台副本仍保存在本机浏览器。${error}` };
+    case "dynamodb":
+      return { label: "DynamoDB", detail: `订单接口写入 DynamoDB。当前工作台副本仍保存在本机浏览器。${error}` };
+    case "memory":
+      return {
+        label: "内存",
+        detail: `工作台副本保存在本机浏览器。订单接口使用进程内存，新实例为空。只有表名时不会标成 DynamoDB。${error}`,
+      };
+  }
+}
+
+export function objectStorePresentation(kind: ObjectStoreKind): { label: string; detail: string } {
+  switch (kind) {
+    case "minio":
+      return { label: "MinIO", detail: "原文对象写入 MinIO。不是 Amazon S3。" };
+    case "s3":
+      return { label: "S3", detail: "原文对象写入 Amazon S3。" };
+    case "disk":
+      return { label: "磁盘", detail: "原文对象写在本机磁盘。不是 Amazon S3。" };
+    case "none":
+      return { label: "无", detail: "没有配置 MinIO、S3 或磁盘邮件目录。" };
+  }
+}
+
+export function storeLabel(kind: PersistenceKind): string {
+  return persistencePresentation({ persistence: kind }).label;
+}
+
+export function mailPresentation(config: Pick<RuntimeConfig, "smtpConfigured" | "sesLive">): {
+  label: string;
+  detail: string;
+  transport: "smtp" | "ses" | "recorded";
+} {
+  if (config.smtpConfigured) {
     return {
-      label: "DynamoDB",
-      detail: "订单接口写入 DynamoDB。当前工作台副本仍保存在本机浏览器。",
+      label: "SMTP 真发信",
+      detail: "将通过 SMTP 提交。成功只表示服务器接受，不是已投递。这次没有标成 SES。",
+      transport: "smtp",
+    };
+  }
+  if (config.sesLive) {
+    return {
+      label: "SES 真发信",
+      detail: "将调用 Amazon SES。成功只表示已提交，不是已投递。",
+      transport: "ses",
     };
   }
   return {
-    label: "内存",
-    detail: "工作台副本保存在本机浏览器。订单接口使用进程内存，新实例为空。只有表名时不会标成 DynamoDB。",
+    label: "仅记录",
+    detail: "外发只记在订单里。投递状态是未发送，没有调用 SMTP，也没有调用 SES。",
+    transport: "recorded",
   };
 }
 
@@ -327,6 +382,7 @@ export function nextStepHint(input: {
   reviewed: boolean;
   hasDraft: boolean;
   sesLive: boolean;
+  smtp?: boolean;
   hasRecordable?: boolean;
 }): string {
   if (!input.hasOrder) return "下一步：加载 DEMO-001。";
@@ -335,29 +391,42 @@ export function nextStepHint(input: {
     return "下一步：回放回复，或打开约定摘要。已提问的事项在新回复前不会再次记录发送。";
   }
   if (!input.hasDraft) return "下一步：生成确认邮件。";
+  if (input.smtp) return "下一步：在草稿中选择 SMTP 提交，或仅记录不发送。";
   if (input.sesLive) return "下一步：在草稿中选择 SES 提交，或仅记录不发送。";
-  return "下一步：在草稿中确认记录发送。当前不会调用 SES。";
+  return "下一步：在草稿中确认记录发送。当前不会调用 SMTP 或 SES。";
 }
 
-export function sendAvailability(config: Pick<RuntimeConfig, "mode" | "sesConfigured" | "sesLive">): {
+export function sendAvailability(config: Pick<RuntimeConfig, "mode" | "sesConfigured" | "sesLive" | "smtpConfigured">): {
   record: CommandAvailability;
-  ses: CommandAvailability;
+  live: CommandAvailability;
+  transport: "smtp" | "ses" | "recorded";
 } {
-  if (config.mode === "aws" && !config.sesConfigured) {
+  const mail = mailPresentation(config);
+  if (config.mode === "aws" && !config.sesConfigured && !config.smtpConfigured) {
     return {
-      record: { disabled: true, reason: "AWS_MODE 缺少 SES 配置。没有发信，也没有记成已投递。" },
-      ses: { disabled: true, reason: "SES 未配置，不能提交发送。" },
+      record: { disabled: true, reason: "AWS_MODE 缺少 SMTP 或 SES 配置。没有发信，也没有记成已投递。" },
+      live: { disabled: true, reason: "没有配置 SMTP 或 SES，不能提交发送。" },
+      transport: "recorded",
     };
   }
-  if (config.sesLive) {
+  if (mail.transport === "smtp") {
     return {
       record: { disabled: false, reason: null },
-      ses: { disabled: false, reason: null },
+      live: { disabled: false, reason: null },
+      transport: "smtp",
+    };
+  }
+  if (mail.transport === "ses") {
+    return {
+      record: { disabled: false, reason: null },
+      live: { disabled: false, reason: null },
+      transport: "ses",
     };
   }
   return {
     record: { disabled: false, reason: null },
-    ses: { disabled: true, reason: "当前不会调用 SES。投递状态只能记为未发送。" },
+    live: { disabled: true, reason: "当前不会调用 SMTP 或 SES。投递状态只能记为未发送。" },
+    transport: "recorded",
   };
 }
 
