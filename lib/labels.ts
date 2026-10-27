@@ -1,4 +1,4 @@
-import type { IssueKind, IssueStatus, MessageSource, Priority, WaitingFor } from "@/lib/types";
+import type { AgreementSummary, DeliveryStatus, IssueKind, IssueStatus, KnownFact, MessageSource, Priority, WaitingFor } from "@/lib/types";
 
 export const STATUS_LABEL: Record<IssueStatus, string> = {
   unconfirmed: "未确认",
@@ -44,3 +44,26 @@ export const STAGE_LABEL: Record<string, string> = {
 export function roleLabel(role: "buyer" | "seller"): string {
   return role === "buyer" ? "买方" : "卖方";
 }
+
+export const DELIVERY_LABEL: Record<DeliveryStatus, string> = {
+  recorded_not_sent: "未发送",
+  submit_succeeded: "已提交，未投递",
+  delivered: "已投递",
+  bounce: "退信",
+  complaint: "投诉",
+  failed: "失败",
+};
+
+export const FACT_STATUS_LABEL: Record<KnownFact["status"], string> = {
+  confirmed: "双方确认",
+  stated_by_one_party: "单方陈述",
+  proposed: "提议，未确认",
+  historical: "已被后续约定取代",
+};
+
+export const AGREEMENT_LABEL: Record<AgreementSummary["agreement_status"], string> = {
+  key_terms_confirmed: "关键约定已确认",
+  incomplete: "关键约定未齐",
+};
+
+export const PIPELINE: IssueStatus[] = ["unconfirmed", "question_sent", "proposed", "confirmed"];
