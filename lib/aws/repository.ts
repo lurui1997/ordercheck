@@ -1,6 +1,8 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { getRuntimeConfig } from "@/lib/aws/config";
+import { openPostgresRepository } from "@/lib/oss/postgres-repository";
+import { openSqliteRepository } from "@/lib/oss/sqlite-repository";
 import { getOrder, saveOrder } from "@/lib/store";
 import type { Order, PersistenceKind } from "@/lib/types";
 
@@ -89,11 +91,23 @@ export function selectOrderRepositoryKind(env: EnvLike = process.env): Persisten
 }
 
 /**
- * DynamoDB when `isDynamoLive` (table + region + credentials). Otherwise the
- * in-memory demo map. Does not catch Dynamo failures and retry against memory.
+ * Postgres when DATABASE_URL is set; else SQLite when PERSISTENCE=sqlite;
+ * else DynamoDB when table + region + credentials are all set; else memory.
+ * Misconfigured explicit modes throw — they do not silently use memory.
+ * Dynamo failures are not retried against memory.
  */
 export function createOrderRepository(env: EnvLike = process.env): OrderRepository {
-  if (selectOrderRepositoryKind(env) === "dynamodb") {
+  const config = getRuntimeConfig(env);
+  if (config.persistenceError) {
+    throw new Error(config.persistenceError);
+  }
+  if (config.persistence === "postgres") {
+    return openPostgresRepository(env.DATABASE_URL ?? "");
+  }
+  if (config.persistence === "sqlite") {
+    return openSqliteRepository(env.SQLITE_PATH?.trim() || ".data/orders.sqlite");
+  }
+  if (config.persistence === "dynamodb") {
     return new DynamoOrderRepository({
       tableName: env.ORDERS_TABLE_NAME,
       region: env.AWS_REGION,

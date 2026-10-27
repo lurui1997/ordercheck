@@ -35,7 +35,7 @@ export async function POST(request: Request) {
         ? 200
         : result.status === "unmatched"
           ? 404
-          : result.status === "s3_error"
+          : result.status === "s3_error" || result.status === "storage_error"
             ? 502
             : 400;
 

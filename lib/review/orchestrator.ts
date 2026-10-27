@@ -2,6 +2,7 @@ import { IntegrationError, reviewWithBedrock } from "@/lib/aws/bedrock";
 import { getRuntimeConfig, reviewEngineLabel } from "@/lib/aws/config";
 import { GatewayError, reviewWithGateway } from "@/lib/aws/gateway";
 import { DeepSeekError, reviewWithDeepseek } from "@/lib/deepseek";
+import { ChatProviderError, reviewWithOpenAICompatible } from "@/lib/oss/openai-compatible";
 import { applyModelReview } from "@/lib/review/model-apply";
 import { reviewOrder } from "@/lib/review/engine";
 import type { Order, ReviewEngine, ReviewMeta, RuntimeConfig } from "@/lib/types";
@@ -27,9 +28,10 @@ export interface ReviewRunResult {
 type EnvLike = Record<string, string | undefined>;
 
 /**
- * Select and run the review engine. Never silently substitutes deterministic
- * results when Bedrock or AI Gateway was selected. Auto selection lives in
- * getRuntimeConfig: gateway, else bedrock when credentials exist, else deterministic.
+ * Select and run the review engine.
+ * auto order is resolved in getRuntimeConfig: deepseek → ollama → gateway → deterministic.
+ * Bedrock runs only when REVIEW_ENGINE=bedrock.
+ * A selected model that fails does not fall through to another engine.
  */
 export async function runReview(
   order: Order,
@@ -38,6 +40,46 @@ export async function runReview(
 ): Promise<ReviewRunResult> {
   const engine = config.reviewEngine;
   const reviewedAt = new Date().toISOString();
+
+  if (config.reviewEngineError) {
+    throw new ReviewOrchestrationError("review_engine_invalid", config.reviewEngineError, "deterministic");
+  }
+
+  if (engine === "ollama") {
+    if (!config.ollamaConfigured) {
+      throw new ReviewOrchestrationError(
+        "ollama_not_configured",
+        "需要 Ollama，但缺少 OLLAMA_MODEL。没有调用模型，也没有用规则引擎、DeepSeek 或 Bedrock 冒充。",
+        "ollama",
+      );
+    }
+    try {
+      const chat = await reviewWithOpenAICompatible({ engine: "ollama", order, env });
+      const applied = applyModelReview(order, chat.payload);
+      if (!applied.ok) {
+        throw new ReviewOrchestrationError("ollama_review_rejected", applied.error, "ollama");
+      }
+      const meta: ReviewMeta = {
+        engine: "ollama",
+        modelRequestId: chat.requestId,
+        ollamaUsage: chat.usage,
+        reviewedAt,
+      };
+      return {
+        order: { ...applied.order, review_meta: meta },
+        engine: "ollama",
+        notice: applied.notice ?? `核对引擎：${reviewEngineLabel("ollama")}`,
+        meta,
+      };
+    } catch (error) {
+      if (error instanceof ReviewOrchestrationError) throw error;
+      if (error instanceof ChatProviderError) {
+        throw new ReviewOrchestrationError(error.code, error.message, "ollama");
+      }
+      const message = error instanceof Error ? error.message : "Ollama 调用失败。";
+      throw new ReviewOrchestrationError("ollama_call_failed", message, "ollama");
+    }
+  }
 
   if (engine === "bedrock") {
     if (!config.bedrockConfigured) {

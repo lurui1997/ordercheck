@@ -1,8 +1,9 @@
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { createOrderRepository, type OrderRepository } from "@/lib/aws/repository";
 import { extractOrderIdFromMail, parseSimpleMime } from "@/lib/aws/mime";
+import { createObjectStore, createS3Client } from "@/lib/oss/object-store";
 import { applyReply } from "@/lib/review/engine";
-import type { Message, Order, Role } from "@/lib/types";
+import type { Message, MessageSource, Order, Role } from "@/lib/types";
 
 export interface InboundMailRecord {
   bucket: string;
@@ -12,9 +13,10 @@ export interface InboundMailRecord {
 }
 
 export interface InboundResult {
-  status: "applied" | "duplicate" | "unmatched" | "s3_error" | "apply_failed";
+  status: "applied" | "duplicate" | "unmatched" | "s3_error" | "storage_error" | "apply_failed";
   orderId?: string;
   error?: string;
+  storageKey?: string;
 }
 
 export interface HandleInboundOptions {
@@ -60,6 +62,70 @@ function resolveRole(order: Order, fromEmail: string): Role | null {
   return null;
 }
 
+export async function applyParsedInbound(input: {
+  repository?: OrderRepository;
+  orderId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  body: string;
+  sentAt?: string;
+  source: Extract<MessageSource, "ses_inbound" | "email_inbound">;
+}): Promise<InboundResult> {
+  const messageId = canonicalMessageId(input.messageId);
+  if (!messageId) {
+    return { status: "apply_failed", orderId: input.orderId, error: "缺少 Message-ID，拒绝写入以免无法去重。" };
+  }
+
+  const repository = input.repository ?? createOrderRepository();
+  const order = await repository.get(input.orderId);
+  if (!order) {
+    return { status: "unmatched", orderId: input.orderId, error: "订单不存在。" };
+  }
+
+  if (order.messages.some((item) => canonicalMessageId(item.id) === messageId)) {
+    return { status: "duplicate", orderId: input.orderId };
+  }
+
+  if (!input.body.trim()) {
+    return { status: "apply_failed", orderId: input.orderId, error: "邮件正文为空。" };
+  }
+
+  const fromRole = resolveRole(order, input.from);
+  if (!fromRole) {
+    return {
+      status: "apply_failed",
+      orderId: input.orderId,
+      error: "发件人不是这张订单的买方或卖方，未写入，也没有改事项状态。",
+    };
+  }
+
+  const message: Message = {
+    id: messageId,
+    source: input.source,
+    from_role: fromRole,
+    sent_at: input.sentAt ?? new Date().toISOString(),
+    subject: input.subject || `Re: OrderCheck ${input.orderId}`,
+    body: input.body,
+  };
+
+  const result = applyReply(order, message, {
+    allowSesInbound: input.source === "ses_inbound",
+    allowEmailInbound: input.source === "email_inbound",
+  });
+  if (!result.ok) {
+    return { status: "apply_failed", orderId: input.orderId, error: result.error };
+  }
+
+  const ungrounded = ungroundedEvidence(result.order);
+  if (ungrounded) {
+    return { status: "apply_failed", orderId: input.orderId, error: ungrounded };
+  }
+
+  await repository.save(result.order);
+  return { status: "applied", orderId: input.orderId };
+}
+
 /**
  * SES receipt → S3 → (Lambda / protected webhook) entry point.
  * Reads MIME via S3 GetObject, associates order, dedupes by message id,
@@ -80,22 +146,34 @@ export async function handleInboundRecord(
   if (options.rawMime !== undefined) {
     raw = options.rawMime;
   } else {
-    const region = options.region ?? process.env.AWS_REGION;
-    if (!region) {
-      return { status: "s3_error", error: "缺少 AWS_REGION，无法 GetObject。" };
-    }
-    const client = options.s3Client ?? new S3Client({ region });
-    try {
-      const response = await client.send(
-        new GetObjectCommand({
-          Bucket: record.bucket,
-          Key: record.key,
-        }),
-      );
-      raw = await streamToString(response.Body);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "S3 GetObject 失败。";
-      return { status: "s3_error", error: message };
+    const store = createObjectStore(process.env);
+    if (store?.kind === "disk") {
+      try {
+        raw = await store.get(record.key);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "读取本地邮件失败。";
+        return { status: "storage_error", error: message };
+      }
+    } else {
+      let client: S3Client;
+      try {
+        client = options.s3Client ?? createS3Client(process.env, options.region);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "缺少对象存储配置，无法读取原始邮件。";
+        return { status: "s3_error", error: message };
+      }
+      try {
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: record.bucket,
+            Key: record.key,
+          }),
+        );
+        raw = await streamToString(response.Body);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "S3 GetObject 失败。";
+        return { status: "s3_error", error: message };
+      }
     }
   }
 
@@ -115,50 +193,16 @@ export async function handleInboundRecord(
     return { status: "unmatched", error: "无法从收件人 / Reply-To / 主题关联订单。" };
   }
 
-  const repository = options.repository ?? createOrderRepository();
-  const order = await repository.get(orderId);
-  if (!order) {
-    return { status: "unmatched", orderId, error: "订单不存在。" };
-  }
-
-  if (order.messages.some((item) => canonicalMessageId(item.id) === messageId)) {
-    return { status: "duplicate", orderId };
-  }
-
-  if (!parsed.body.trim()) {
-    return { status: "apply_failed", orderId, error: "邮件正文为空。" };
-  }
-
-  const fromRole = resolveRole(order, parsed.from);
-  if (!fromRole) {
-    return {
-      status: "apply_failed",
-      orderId,
-      error: "发件人不是这张订单的买方或卖方，未写入，也没有改事项状态。",
-    };
-  }
-
-  const message: Message = {
-    id: messageId,
-    source: "ses_inbound",
-    from_role: fromRole,
-    sent_at: sentAtFromMime(parsed.date),
-    subject: parsed.subject || `Re: OrderCheck ${orderId}`,
+  return applyParsedInbound({
+    repository: options.repository,
+    orderId,
+    messageId,
+    from: parsed.from,
+    subject: parsed.subject,
     body: parsed.body,
-  };
-
-  const result = applyReply(order, message, { allowSesInbound: true });
-  if (!result.ok) {
-    return { status: "apply_failed", orderId, error: result.error };
-  }
-
-  const ungrounded = ungroundedEvidence(result.order);
-  if (ungrounded) {
-    return { status: "apply_failed", orderId, error: ungrounded };
-  }
-
-  await repository.save(result.order);
-  return { status: "applied", orderId };
+    sentAt: sentAtFromMime(parsed.date),
+    source: "ses_inbound",
+  });
 }
 
 /** Refuse to persist a reply whose quotes are not substrings of the cited message. */

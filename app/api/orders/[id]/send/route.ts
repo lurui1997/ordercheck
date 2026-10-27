@@ -2,6 +2,7 @@ import { getRuntimeConfig } from "@/lib/aws/config";
 import { createOrderRepository } from "@/lib/aws/repository";
 import { MailNotReadyError, submitEmail } from "@/lib/aws/ses";
 import { jsonError, readJson } from "@/lib/http";
+import { SmtpError, submitSmtp } from "@/lib/oss/smtp";
 import { recordOutbound } from "@/lib/review/engine";
 import type { Order } from "@/lib/types";
 
@@ -33,9 +34,28 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const text = typeof body.body === "string" ? body.body : "";
   const config = getRuntimeConfig();
 
-  let submit: { messageId: string; from?: string } | undefined;
+  let submit: { messageId: string; from?: string; provider?: "ses" | "smtp" } | undefined;
+  let transport: "smtp" | "ses" | "recorded" = "recorded";
 
-  if (config.sesLive) {
+  if (config.smtpConfigured) {
+    try {
+      const result = await submitSmtp({
+        to,
+        subject,
+        textBody: text,
+        replyTo: process.env.SMTP_REPLY_TO || process.env.SES_REPLY_TO_ADDRESS || undefined,
+      });
+      submit = { messageId: result.messageId, from: result.from, provider: "smtp" };
+      transport = "smtp";
+    } catch (error) {
+      if (error instanceof SmtpError) {
+        const status = error.code === "smtp_not_configured" ? 501 : 502;
+        return jsonError(status, error.code, error.message);
+      }
+      const message = error instanceof Error ? error.message : "SMTP 发送失败。";
+      return jsonError(502, "smtp_submit_failed", message);
+    }
+  } else if (config.sesLive) {
     try {
       const result = await submitEmail({
         from: process.env.SES_FROM_ADDRESS ?? "",
@@ -46,7 +66,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         configurationSet: process.env.SES_CONFIGURATION_SET || undefined,
         region: process.env.AWS_REGION,
       });
-      submit = { messageId: result.messageId, from: process.env.SES_FROM_ADDRESS };
+      submit = { messageId: result.messageId, from: process.env.SES_FROM_ADDRESS, provider: "ses" };
+      transport = "ses";
     } catch (error) {
       if (error instanceof MailNotReadyError) {
         const status = error.code === "ses_not_configured" ? 501 : 502;
@@ -55,8 +76,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const message = error instanceof Error ? error.message : "SES 发送失败。";
       return jsonError(502, "ses_submit_failed", message);
     }
-  } else if (config.mode === "aws" && !config.sesConfigured) {
-    return jsonError(501, "ses_not_configured", "AWS_MODE 缺少 SES_FROM_ADDRESS 或 AWS_REGION。没有发信，也没有把结果记成已投递。");
+  } else if (config.mode === "aws") {
+    return jsonError(
+      501,
+      "mail_not_configured",
+      "AWS_MODE 没有配置 SMTP（SMTP_HOST + SMTP_FROM）或 SES（SES_FROM_ADDRESS + AWS_REGION）。没有发信，也没有把结果记成已投递。",
+    );
   }
 
   const result = recordOutbound(order, { to, subject, body: text, issueIds, submit });
@@ -73,6 +98,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     order: result.order,
     delivery_status,
     messageId: submit?.messageId,
-    ses_live: Boolean(submit),
+    transport,
+    ses_live: transport === "ses",
+    smtp_live: transport === "smtp",
   });
 }

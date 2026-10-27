@@ -8,12 +8,12 @@ Use this as the Devpost / judge packet checklist.
 - [x] **LICENSE** — MIT, Copyright 2026 `luyanqi` / OrderCheck Contributors (`LICENSE`)
 - [x] **Architecture** — `docs/ARCHITECTURE.md` + deployable IaC in [`infra/`](../infra/) (SAM)
 - [x] **CDS runtime evidence** — `docs/CDS_RUNTIME.md` + `lib/aws/sdk-surface.test.ts`
-- [x] **Honest AI labeling** — `REVIEW_ENGINE` / `draftEngine`: `bedrock` | `ai_gateway` | `deterministic`
+- [x] **Honest AI labeling** — `REVIEW_ENGINE` / `draftEngine`: `deepseek` | `ollama` | `ai_gateway` | `deterministic` | `bedrock` (bedrock only when explicitly selected)
 - [ ] **Demo video** — record workspace DEMO-001 loop + optional health/engine screenshot (attach on Devpost)
 - [ ] **ACE / team profile** — complete on Devpost as required by the hackathon
 - [x] **Deployed URL** — https://ordercheck-lurui1997s-projects.vercel.app (alias); `GET /api/health`
-- [x] **Health** — `/api/health` exposes mode, `reviewEngine`, `reviewEngineSelection`, `liveEngine`, `persistence`, bedrock/ses/dynamo/s3/gateway/deepseek/inbound flags, `missing[]`. `dynamo: true` only when table + region + credentials are set. `deepseek: true` only when `DEEPSEEK_API_KEY` is set.
-- [x] **Compare** — `POST /api/orders/:id/review-compare` and the **双引擎对比** button. Live unavailable stays labeled.
+- [x] **Health** — `/api/health` exposes mode, `reviewEngine`, `reviewEngineSelection`, `liveEngine`, `persistence`, `objectStore`, bedrock/deepseek/ollama/ses/sesLive/smtp/dynamo/s3/gateway/inbound flags, `missing[]`. `dynamo: true` only when table + region + credentials are set. `deepseek: true` only when `DEEPSEEK_API_KEY` is set. `smtp: true` only when host and from are set.
+- [x] **Compare** — `POST /api/orders/:id/review-compare` and the **双引擎对比** button. Live unavailable stays labeled. Auto live order is DeepSeek → Ollama → Gateway; Bedrock only when explicitly selected.
 - [x] **Eval** — `npm run eval` scores `lib/eval/fixtures.ts` (≥8 cases) with checklist pass plus micro precision/recall. Deterministic engine only.
 
 ## Problem
@@ -45,31 +45,35 @@ account-resource prerequisites). Runtime SDK map: [CDS_RUNTIME.md](./CDS_RUNTIME
 
 | Service | Code | Runtime |
 |---|---|---|
-| Bedrock Runtime Converse + tool | `lib/aws/bedrock.ts`, `lib/review/draft-model.ts` | Explicit `REVIEW_ENGINE=bedrock`, or auto when Gateway is unset and region + model + AWS credentials exist |
+| Bedrock Runtime Converse + tool | `lib/aws/bedrock.ts`, `lib/review/draft-model.ts` | Only when `REVIEW_ENGINE=bedrock` plus region/model. Default auto path is DeepSeek → Ollama → gateway → deterministic ([OSS_RUNTIME.md](./OSS_RUNTIME.md)) |
 | SES SendEmail | `lib/aws/ses.ts` | When `AWS_MODE` + `SES_FROM_ADDRESS` + `AWS_REGION` |
 | SES inbound via S3 | `lib/aws/inbound.ts` + `infra/` | Lambda or `POST /api/aws/inbound` with secret. Buyer/seller replies merge evidence and advance only related issues |
 | SES delivery events | `lib/aws/ses-events.ts` + `infra/` | `POST /api/aws/ses-events` with secret |
 | DynamoDB | `lib/aws/repository.ts` + `infra/OrdersTable` | `dynamo: true` only with `ORDERS_TABLE_NAME` + `AWS_REGION` + credentials. Otherwise memory |
-| AI Gateway (non-CDS backup) | `lib/aws/gateway.ts` | Auto when `AI_GATEWAY_API_KEY` is set, or explicit `REVIEW_ENGINE=gateway`. Labeled `ai_gateway` |
-| DeepSeek (OpenAI-compatible, non-CDS) | `lib/deepseek.ts` | `REVIEW_ENGINE=deepseek` or auto when Gateway is unset and `DEEPSEEK_API_KEY` is set. Labeled `deepseek` only. No silent deterministic draft fallback |
+| AI Gateway (non-CDS backup) | `lib/aws/gateway.ts` | Auto after DeepSeek and Ollama, or explicit `REVIEW_ENGINE=gateway`. Labeled `ai_gateway` |
+| DeepSeek (OpenAI-compatible, non-CDS) | `lib/deepseek.ts` | First auto choice when `DEEPSEEK_API_KEY` is set, or explicit `REVIEW_ENGINE=deepseek`. Labeled `deepseek` only. No silent deterministic draft fallback |
+| Ollama (OpenAI-compatible, self-hosted) | `lib/oss/openai-compatible.ts` | Auto when DeepSeek is unset and `OLLAMA_MODEL` is set, or explicit `REVIEW_ENGINE=ollama`. Labeled `ollama` only |
+| SMTP | `lib/oss/smtp.ts` | Preferred over SES when `SMTP_HOST` + `SMTP_FROM` are set. Success is `submit_succeeded` only |
+| Postgres / SQLite | `lib/oss/postgres-repository.ts`, `lib/oss/sqlite-repository.ts` | `DATABASE_URL` or `PERSISTENCE=sqlite`. Both win over DynamoDB |
 
 ## How to demo (judges)
 
 1. Open the production URL → load **DEMO-001** → **开始核对**. Header badges show
    `review:` (configured engine, `auto` or `explicit`) and, after a run, `ran:`
    (the engine that actually returned). Do not treat a config flag as a completed call.
+   With no model keys this is the deterministic engine.
 2. Click **双引擎对比**. If live is not configured, the right column says
    live unavailable and names the missing env vars; the left column is the
    deterministic issue set (milestone, sample, inserts, shipping/payment).
    Agreement stays `comparable: false` until a live call succeeds.
 3. Call `GET /api/health` — `reviewEngine`, `reviewEngineSelection`, `liveEngine`,
-   `persistence`, `bedrock`/`ses`/`dynamo`/`s3`/`gateway`/`inbound`, and `missing`
-   (no secrets). `dynamo: true` means the DynamoDB client is selected, not that a
-   write has already succeeded.
+   `persistence`, `objectStore`, `bedrock`/`deepseek`/`ollama`/`ses`/`sesLive`/`smtp`/`dynamo`/`s3`/`gateway`/`inbound`,
+   and `missing` (no secrets). `dynamo: true` means the DynamoDB client is selected, not that a
+   write has already succeeded. Auto order is DeepSeek → Ollama → Gateway → deterministic.
 4. From a checkout, run `npm run eval`. It scores the deterministic engine on
    eight-plus fixtures (agreed quantity not re-asked, milestone mismatch, sample
    mismatch, incomplete price, shipping/payment/acceptance gaps).
-5. With Gateway or Bedrock configured: review again and screenshot **引擎 + request id / tokens**
+5. With DeepSeek, Ollama, Gateway, or explicit Bedrock configured: review again and screenshot **引擎 + request id / tokens**
    under 待确认事项 and the `ran:` badge; generate confirmation email and note
    `draftEngine` under the draft modal when a model path was used. A failed live
    review is an error, not a silent rule-engine result.
@@ -82,17 +86,21 @@ account-resource prerequisites). Runtime SDK map: [CDS_RUNTIME.md](./CDS_RUNTIME
 
 ## What’s live vs stub
 
-**Live in this deploy (typical Vercel demo):** DEMO-001 loop. If `AI_GATEWAY_API_KEY`
-is set and `REVIEW_ENGINE` is unset, **开始核对** calls AI Gateway and the `ran:`
-badge says `ai_gateway`. Set `REVIEW_ENGINE=deterministic` to keep the offline rule
-engine. Compare, health, and eval are in the repo. Adapter **source** uses real AWS
-SDK imports; SAM IaC is under `infra/` for judges who are not deploying.
+**Live in this deploy (typical Vercel demo):** DEMO-001 loop. With `REVIEW_ENGINE`
+unset, **开始核对** uses the first configured engine in this order: DeepSeek, Ollama,
+AI Gateway, then the deterministic rule engine. The `ran:` badge names that engine.
+Set `REVIEW_ENGINE=deterministic` to keep the offline rule engine. Bedrock is not
+selected unless `REVIEW_ENGINE=bedrock`. Compare, health, and eval are in the repo.
+Adapter **source** uses real AWS SDK imports; SAM IaC is under `infra/` for judges
+who are not deploying. SMTP, MinIO, Postgres, and SQLite are the default self-hosted
+path ([OSS_RUNTIME.md](./OSS_RUNTIME.md)).
 
 **Needs your AWS account resources:** Bedrock model access + IAM, verified SES identity
 and configuration set, DynamoDB table, S3 raw-mail bucket + receipt rule, inbound
 webhook secret / Lambda. Without them, APIs return explicit 501/502 — they do **not**
-fake delivery or Bedrock labels. Draft LLM failures fall back to deterministic
-`buildDraft` with `draftEngine: deterministic`.
+fake delivery or Bedrock labels. DeepSeek draft failures return an error and do not
+substitute `buildDraft`. Ollama, Gateway, and Bedrock draft failures fall back to
+deterministic `buildDraft` with `draftEngine: deterministic`.
 
 **Out of scope / future:** WhatsApp/SMS / Amazon End User Messaging multi-channel
 (one-line mention in `infra/README.md` only); full Amazon Bedrock AgentCore rewrite
@@ -103,5 +111,5 @@ fake delivery or Bedrock labels. Draft LLM failures fall back to deterministic
 - No secrets in git; credential chain / Vercel env only.
 - Evidence quotes must be message substrings; invalid model citations are dropped.
 - Delivery status is event-sourced; Send ≠ Delivered.
-- Protected inbound webhooks; public message API cannot forge `ses_inbound`.
+- Protected inbound webhooks; public message API cannot forge `ses_inbound` or `email_inbound`.
 - MIT license at repo root.

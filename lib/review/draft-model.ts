@@ -8,6 +8,7 @@ import { createGateway } from "@ai-sdk/gateway";
 import { generateText } from "ai";
 import { getRuntimeConfig } from "@/lib/aws/config";
 import { DeepSeekError, draftWithDeepseek } from "@/lib/deepseek";
+import { ChatProviderError, draftWithOpenAICompatible } from "@/lib/oss/openai-compatible";
 import { buildDraft } from "@/lib/review/draft";
 import type { EmailDraft, Order, ReviewEngine, RuntimeConfig } from "@/lib/types";
 
@@ -15,7 +16,7 @@ export type DraftEngine = ReviewEngine;
 
 export interface DraftWithModelResult {
   draft: EmailDraft;
-  /** Honest label: bedrock | ai_gateway | deterministic (never claim bedrock on fallback). */
+  /** Honest label. Fallback is always deterministic — never bedrock for a non-Bedrock draft. */
   draftEngine: DraftEngine;
   notice?: string;
 }
@@ -177,10 +178,20 @@ async function draftWithGateway(order: Order, issueIds: string[], env: EnvLike):
   return toEmailDraft(order, issueIds, fields.subject, fields.body);
 }
 
+async function draftWithOllama(order: Order, issueIds: string[], env: EnvLike): Promise<EmailDraft> {
+  const fields = await draftWithOpenAICompatible({
+    engine: "ollama",
+    order,
+    prompt: buildDraftPrompt(order, issueIds),
+    env,
+  });
+  return toEmailDraft(order, issueIds, fields.subject, fields.body);
+}
+
 /**
  * Optional LLM path for confirmation email drafts.
- * Bedrock and AI Gateway failures fall back to deterministic buildDraft and
- * label draftEngine as "deterministic".
+ * Bedrock, AI Gateway, and Ollama failures fall back to deterministic buildDraft
+ * and label draftEngine as "deterministic".
  * DeepSeek failures throw DeepSeekError and do not substitute that template.
  */
 export async function draftWithModel(
@@ -225,6 +236,24 @@ export async function draftWithModel(
       draftEngine: "deepseek" as const,
       notice: "Confirmation draft generated with DeepSeek (not Bedrock, not AI Gateway).",
     };
+  }
+
+  if (engine === "ollama" && config.ollamaConfigured) {
+    try {
+      const draft = await draftWithOllama(order, issueIds, env);
+      return {
+        draft,
+        draftEngine: "ollama",
+        notice: "Confirmation draft generated with Ollama (not Bedrock, not DeepSeek).",
+      };
+    } catch (error) {
+      const message = error instanceof ChatProviderError ? error.message : error instanceof Error ? error.message : "ollama_draft_failed";
+      return {
+        draft: buildDraft(order, issueIds),
+        draftEngine: "deterministic",
+        notice: `Ollama draft failed (${message}); fell back to deterministic buildDraft.`,
+      };
+    }
   }
 
   if (engine === "ai_gateway" && config.gatewayConfigured) {

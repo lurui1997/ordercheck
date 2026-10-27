@@ -20,7 +20,7 @@ import {
   reviewOrder,
 } from "@/lib/review/engine";
 import { ambiguousReply, createOrderFromScenario, reopenReply, scriptedReplies } from "@/lib/scenario";
-import type { AgreementSummary, DecisionKind, EmailDraft, IssueStatus, Order, ReviewCompareResult, Role, RuntimeConfig } from "@/lib/types";
+import type { AgreementSummary, DecisionKind, EmailDraft, IssueStatus, Order, ReviewCompareResult, ReviewEngine, Role, RuntimeConfig } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "ordercheck.demo.v1";
@@ -31,6 +31,26 @@ const FACT_STATUS: Record<string, string> = {
   proposed: "提议，未确认",
   historical: "已被后续约定取代",
 };
+
+const DRAFT_ENGINE_NOTE: Record<ReviewEngine, string> = {
+  bedrock: "Amazon Bedrock 生成（可编辑）",
+  ai_gateway: "Vercel AI Gateway 生成（可编辑；不是 Bedrock）",
+  deepseek: "DeepSeek 生成（可编辑；不是 Bedrock）",
+  ollama: "Ollama 生成（可编辑；不是 Bedrock）",
+  deterministic: "确定性模板（不是 Bedrock / DeepSeek / Ollama）",
+};
+
+function mailBadge(config: RuntimeConfig): string {
+  if (config.smtpConfigured) return "smtp: live";
+  if (config.sesLive) return "ses: live";
+  return "mail: recorded";
+}
+
+function mailBanner(config: RuntimeConfig): string {
+  if (config.smtpConfigured) return "SMTP 真提交（submit_succeeded ≠ 已投递）";
+  if (config.sesLive) return "SES 真发信（submit_succeeded ≠ 已投递）";
+  return "仅记录未发送";
+}
 
 const OPEN_FOR_MAIL: IssueStatus[] = ["unconfirmed", "question_sent", "proposed", "reopened", "needs_human_review"];
 const CLOSED = new Set<IssueStatus>(["confirmed", "accepted_risk", "not_applicable"]);
@@ -58,7 +78,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
   const [emailOpen, setEmailOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [draft, setDraft] = useState<EmailDraft | null>(null);
-  const [draftEngine, setDraftEngine] = useState<"deterministic" | "bedrock" | "ai_gateway" | "deepseek" | null>(null);
+  const [draftEngine, setDraftEngine] = useState<ReviewEngine | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [replyRole, setReplyRole] = useState<Role>("buyer");
   const [replyBody, setReplyBody] = useState("");
@@ -112,11 +132,13 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setCompare(null);
     setError(null);
     setPane("materials");
-    if (config.persistence !== "dynamodb") {
+    const durable = config.persistence === "postgres" || config.persistence === "sqlite" || config.persistence === "dynamodb";
+    if (!durable) {
       setNotice("已加载 DEMO-001。三封邮件看起来像是谈过了，但还没有核对。");
       return;
     }
-    setNotice("已在浏览器打开 DEMO-001，正在写入 DynamoDB…");
+    const storeLabel = config.persistence === "postgres" ? "Postgres" : config.persistence === "sqlite" ? "SQLite" : "DynamoDB";
+    setNotice(`已在浏览器打开 DEMO-001，正在写入 ${storeLabel}…`);
     try {
       const response = await fetch("/api/orders", {
         method: "POST",
@@ -125,19 +147,18 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       });
       const data = (await response.json()) as { error?: { message?: string } };
       if (!response.ok) {
-        setError(data.error?.message ?? "DynamoDB 写入失败。浏览器里的样例仍可核对，没有改标成已持久化。");
+        setError(data.error?.message ?? `${storeLabel} 写入失败。浏览器里的样例仍可核对，没有改标成已持久化。`);
         return;
       }
-      setNotice("已加载 DEMO-001，并写入 DynamoDB（整单 JSON，含邮件与事项）。");
+      setNotice(`已加载 DEMO-001，并写入 ${storeLabel}（整单 JSON，含邮件与事项）。`);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "DynamoDB 写入失败。浏览器里的样例仍可核对。");
+      setError(loadError instanceof Error ? loadError.message : `${storeLabel} 写入失败。浏览器里的样例仍可核对。`);
     }
   }
 
   async function onReview() {
     if (!order) return;
-    const needsRemote =
-      config.reviewEngine === "bedrock" || config.reviewEngine === "ai_gateway" || config.reviewEngine === "deepseek";
+    const needsRemote = Boolean(config.reviewEngineError) || config.reviewEngine !== "deterministic";
     if (needsRemote) {
       setError(null);
       setNotice("正在调用核对引擎…");
@@ -157,6 +178,8 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
             bedrockRequestId?: string;
             gatewayUsage?: { totalTokens?: number };
             deepseekUsage?: { totalTokens?: number };
+            ollamaUsage?: { totalTokens?: number };
+            modelRequestId?: string;
             agentRetries?: number;
           };
           error?: { code?: string; message?: string };
@@ -175,15 +198,22 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
           );
           return;
         }
-        const requestId = data.bedrockRequestId ?? data.meta?.bedrockRequestId;
+        const requestId = data.bedrockRequestId ?? data.meta?.bedrockRequestId ?? data.meta?.modelRequestId;
+        const gatewayTokens = data.gatewayUsage?.totalTokens ?? data.meta?.gatewayUsage?.totalTokens;
+        const deepseekTokens = data.meta?.deepseekUsage?.totalTokens;
+        const ollamaTokens = data.meta?.ollamaUsage?.totalTokens;
         const engineNote =
           data.engine === "bedrock"
             ? `核对引擎：Amazon Bedrock（真实模型调用，不是规则引擎）${requestId ? ` · request id ${requestId}` : ""}。`
             : data.engine === "ai_gateway"
-              ? `核对引擎：Vercel AI Gateway（真实模型调用；不是 Bedrock，也不是规则引擎）${data.gatewayUsage?.totalTokens != null || data.meta?.gatewayUsage?.totalTokens != null ? ` · tokens ${data.gatewayUsage?.totalTokens ?? data.meta?.gatewayUsage?.totalTokens}` : ""}。`
+              ? `核对引擎：Vercel AI Gateway（真实模型调用；不是 Bedrock，也不是规则引擎）${gatewayTokens != null ? ` · tokens ${gatewayTokens}` : ""}。`
               : data.engine === "deepseek"
-                ? `核对引擎：DeepSeek（OpenAI 兼容接口；不是 Bedrock，也不是 AI Gateway）${data.meta?.deepseekUsage?.totalTokens != null ? ` · tokens ${data.meta.deepseekUsage.totalTokens}` : ""}。`
-                : "核对引擎：确定性规则引擎。";
+                ? `核对引擎：DeepSeek（OpenAI 兼容接口；不是 Bedrock，也不是 AI Gateway）${deepseekTokens != null ? ` · tokens ${deepseekTokens}` : ""}。`
+                : data.engine === "ollama"
+                  ? `核对引擎：Ollama（本地 OpenAI 兼容接口；不是 Bedrock，也不是 DeepSeek）${requestId ? ` · request id ${requestId}` : ""}${ollamaTokens != null ? ` · tokens ${ollamaTokens}` : ""}。`
+                  : data.engine === "deterministic"
+                    ? "核对引擎：确定性规则引擎。"
+                    : `核对引擎：${data.engine ?? "unknown"}。`;
         commit(data.order, data.notice ? `${data.notice} ${engineNote}` : engineNote);
         const persistence = (data as { persistence?: { ok?: boolean; store?: string; error?: string } }).persistence;
         if (persistence && persistence.ok === false) {
@@ -206,7 +236,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     }
     commit(
       { ...result.order, review_meta: { engine: "deterministic", reviewedAt: new Date().toISOString() } },
-      "核对完成。每条引用都能在左侧原文定位。核对引擎：确定性规则引擎（不是 Bedrock / AI Gateway）。",
+      "核对完成。每条引用都能在左侧原文定位。核对引擎：确定性规则引擎（不是 Bedrock / DeepSeek / Ollama）。",
     );
     setPane("issues");
   }
@@ -261,7 +291,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       });
       const data = (await response.json()) as {
         draft?: EmailDraft;
-        draftEngine?: "deterministic" | "bedrock" | "ai_gateway" | "deepseek";
+        draftEngine?: ReviewEngine;
         notice?: string;
         error?: { code?: string; message?: string };
       };
@@ -325,9 +355,10 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
 
   async function sendDraft() {
     if (!order || !draft) return;
-    if (config.sesLive) {
+    const liveMail = config.smtpConfigured ? "smtp" : config.sesLive ? "ses" : null;
+    if (liveMail) {
       setError(null);
-      setNotice("正在通过 Amazon SES 提交发送…");
+      setNotice(liveMail === "smtp" ? "正在通过 SMTP 提交发送…" : "正在通过 Amazon SES 提交发送…");
       try {
         const response = await fetch(`/api/orders/${order.id}/send`, {
           method: "POST",
@@ -344,18 +375,21 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
           order?: Order;
           delivery_status?: string;
           messageId?: string;
+          transport?: string;
           error?: { code?: string; message?: string };
         };
         if (!response.ok || !data.order) {
           setNotice(null);
-          setError(data.error?.message ?? "SES 发信失败。");
+          setError(data.error?.message ?? (liveMail === "smtp" ? "SMTP 发信失败。" : "SES 发信失败。"));
           return;
         }
+        const accepted =
+          data.transport === "smtp"
+            ? `SMTP 已接受提交${data.messageId ? `（MessageId: ${data.messageId}）` : ""}。这是提交成功，不是已投递。`
+            : `Amazon SES 已接受提交${data.messageId ? `（MessageId: ${data.messageId}）` : ""}。这是提交成功，不是已投递。`;
         commit(
           data.order,
-          data.delivery_status === "submit_succeeded"
-            ? `Amazon SES 已接受提交${data.messageId ? `（MessageId: ${data.messageId}）` : ""}。这是提交成功，不是已投递。`
-            : "已记录外发，但未走 SES。",
+          data.delivery_status === "submit_succeeded" ? accepted : "已记录外发，但没有真实提交。",
         );
         setEmailOpen(false);
         setPane("materials");
@@ -366,8 +400,8 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       return;
     }
 
-    if (config.mode === "aws" && !config.sesConfigured) {
-      setError("AWS_MODE 缺少 SES 配置，没有发信，也没有记成已投递。");
+    if (config.mode === "aws" && !config.sesConfigured && !config.smtpConfigured) {
+      setError("AWS_MODE 缺少 SMTP 或 SES 配置，没有发信，也没有记成已投递。");
       setEmailOpen(false);
       return;
     }
@@ -382,7 +416,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       setError(result.error);
       return;
     }
-    commit(result.order, "已记录外发。投递状态是「未发送」：样例模式没有调用 SES。");
+    commit(result.order, "已记录外发。投递状态是「未发送」：没有调用 SMTP，也没有调用 SES。");
     setEmailOpen(false);
     setPane("materials");
   }
@@ -439,7 +473,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
               {config.modeLabel}
             </span>
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
-              review: {config.reviewEngine}
+              review: {config.reviewEngineError ? "invalid" : config.reviewEngine}
               {config.reviewEngineSelection === "auto" ? " · auto" : " · explicit"}
             </span>
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
@@ -449,7 +483,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
               store: {config.persistence}
             </span>
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
-              ses: {config.sesLive ? "live" : "recorded"}
+              {mailBadge(config)}
             </span>
             {order ? (
               <span className="text-sm text-[#d9d0c2]">
@@ -464,21 +498,26 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
 
       <main className="mx-auto max-w-6xl px-4 py-4 sm:px-6 sm:py-6">
         <section className="rounded-2xl bg-[#f6f1e6] p-4 shadow-[0_24px_60px_rgba(0,0,0,0.28)] sm:p-6">
-          {config.mode === "aws" || config.reviewEngine !== "deterministic" || config.sesLive ? (
+          {config.mode === "aws" || config.reviewEngine !== "deterministic" || config.sesLive || config.smtpConfigured || config.reviewEngineError ? (
             <p role="status" className="mb-4 rounded-md border border-[#c4452d]/40 bg-[#fde8e4] px-3 py-2 text-sm leading-6 text-[#7d2b1d]">
-              {config.modeLabel} · 核对引擎 <strong>{config.reviewEngine}</strong>
-              （{config.reviewEngineSelection === "auto" ? "auto：Gateway，其次 DeepSeek，再次有凭证的 Bedrock，否则规则引擎" : "显式 REVIEW_ENGINE"}）
-              · 存储 <strong>{config.persistence}</strong>
-              · SES {config.sesLive ? "真发信（submit_succeeded ≠ 已投递）" : "仅记录未发送"}。
+              {config.modeLabel} · 核对引擎 <strong>{config.reviewEngineError ? "invalid" : config.reviewEngine}</strong>
+              （{config.reviewEngineSelection === "auto" ? "auto：DeepSeek，其次 Ollama，再次 Gateway，否则规则引擎" : "显式 REVIEW_ENGINE"}）
+              {" · "}
+              {mailBanner(config)}
+              {" · "}存储 <strong>{config.persistence}</strong>。
               {config.missing.length ? ` 还缺 ${config.missing.join("、")}。` : ""}
+              {config.reviewEngineError ? ` ${config.reviewEngineError}` : ""}
               {config.reviewEngine === "bedrock" && !config.bedrockConfigured
                 ? " Bedrock 尚未配置齐全，开始核对会返回明确错误，不会回退到规则引擎。"
                 : ""}
-              {config.reviewEngine === "ai_gateway" && !config.gatewayConfigured
-                ? " AI Gateway 尚未配置 AI_GATEWAY_API_KEY。"
-                : ""}
               {config.reviewEngine === "deepseek" && !config.deepseekConfigured
                 ? " DeepSeek 尚未配置 DEEPSEEK_API_KEY。开始核对会返回明确错误，不会回退到规则引擎，也不会标成 Bedrock 或 AI Gateway。"
+                : ""}
+              {config.reviewEngine === "ollama" && !config.ollamaConfigured
+                ? " Ollama 尚未配置 OLLAMA_MODEL，开始核对会返回明确错误，不会回退到规则引擎。"
+                : ""}
+              {config.reviewEngine === "ai_gateway" && !config.gatewayConfigured
+                ? " AI Gateway 尚未配置 AI_GATEWAY_API_KEY。"
                 : ""}
             </p>
           ) : null}
@@ -582,11 +621,15 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                       <p className="mb-3 text-[11px] leading-4 text-[#8a7f6f]">
                         引擎 {order.review_meta.engine}
                         {order.review_meta.bedrockRequestId ? ` · request id ${order.review_meta.bedrockRequestId}` : ""}
+                        {order.review_meta.modelRequestId ? ` · request id ${order.review_meta.modelRequestId}` : ""}
                         {order.review_meta.gatewayUsage?.totalTokens != null
                           ? ` · gateway tokens ${order.review_meta.gatewayUsage.totalTokens}`
                           : ""}
                         {order.review_meta.deepseekUsage?.totalTokens != null
                           ? ` · deepseek tokens ${order.review_meta.deepseekUsage.totalTokens}`
+                          : ""}
+                        {order.review_meta.ollamaUsage?.totalTokens != null
+                          ? ` · ollama tokens ${order.review_meta.ollamaUsage.totalTokens}`
                           : ""}
                         {order.review_meta.agentRetries ? ` · agent retry ${order.review_meta.agentRetries}` : ""}
                       </p>
@@ -628,23 +671,26 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
           open={emailOpen}
           onOpenChange={setEmailOpen}
           title="确认邮件"
-          description={config.sesLive ? "先改内容，再确认。将调用 Amazon SES；成功仅表示提交成功，不是已投递。" : "先改内容，再记录发送。样例模式不会调用 SES，也不会显示已投递。"}
+          description={
+            config.smtpConfigured
+              ? "先改内容，再确认。将通过 SMTP 提交；成功仅表示服务器接受，不是已投递。"
+              : config.sesLive
+                ? "先改内容，再确认。将调用 Amazon SES；成功仅表示提交成功，不是已投递。"
+                : "先改内容，再记录发送。没有配置 SMTP 或 SES 时不会发信，也不会显示已投递。"
+          }
         >
           <div className="space-y-3">
             {draftEngine && draftEngine !== "deterministic" ? (
               <p className="text-xs leading-5 text-[#5c6775]">
                 draftEngine: {draftEngine}
-                {draftEngine === "bedrock"
-                  ? " · Amazon Bedrock 生成（可编辑）"
-                  : draftEngine === "deepseek"
-                    ? " · DeepSeek 生成（可编辑；不是 Bedrock，也不是 AI Gateway）"
-                    : " · Vercel AI Gateway 生成（可编辑；不是 Bedrock）"}
+                {" · "}
+                {DRAFT_ENGINE_NOTE[draftEngine]}
                 {draftBusy ? " · 更新中…" : ""}
               </p>
             ) : draftBusy ? (
               <p className="text-xs leading-5 text-[#5c6775]">正在生成草稿…</p>
             ) : draftEngine === "deterministic" ? (
-              <p className="text-xs leading-5 text-[#5c6775]">draftEngine: deterministic · 确定性模板（不是 Bedrock）</p>
+              <p className="text-xs leading-5 text-[#5c6775]">draftEngine: deterministic · {DRAFT_ENGINE_NOTE.deterministic}</p>
             ) : null}
             <fieldset>
               <legend className="text-sm font-semibold">纳入这封邮件的事项</legend>
@@ -682,16 +728,18 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
               <Textarea id="mail-body" className="mt-1 min-h-64" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
             </div>
             <p className="rounded-md bg-[#f8efd8] px-3 py-2 text-sm leading-6 text-[#6d4a10]">
-              {config.sesLive
-                ? "将使用 SES_FROM_ADDRESS 真实提交。成功状态是 submit_succeeded，不是 delivered。"
-                : "buyer@example.com 不能用于真实发信。确认后只把邮件记到这条订单里，投递状态保持「未发送」。"}
+              {config.smtpConfigured
+                ? "将使用 SMTP_FROM 真实提交。成功状态是 submit_succeeded，不是 delivered。"
+                : config.sesLive
+                  ? "将使用 SES_FROM_ADDRESS 真实提交。成功状态是 submit_succeeded，不是 delivered。"
+                  : "buyer@example.com 不能用于真实发信。确认后只把邮件记到这条订单里，投递状态保持「未发送」。"}
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setEmailOpen(false)}>
                 返回修改
               </Button>
               <Button variant="vermilion" onClick={() => void sendDraft()}>
-                {config.sesLive ? "确认 SES 发送" : "确认记录发送"}
+                {config.smtpConfigured ? "确认 SMTP 发送" : config.sesLive ? "确认 SES 发送" : "确认记录发送"}
               </Button>
             </div>
           </div>

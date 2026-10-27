@@ -14,11 +14,14 @@ or writing `delivered` without an SES event, would look like integration while l
 ## Decision
 
 1. **Engine selection is labeled.** Explicit `REVIEW_ENGINE` wins. When it is unset
-   or `auto`, prefer AI Gateway if configured, else Bedrock if region, model id, and
-   AWS credentials are visible, else deterministic. If Bedrock or Gateway is selected
-   and misconfigured or the call fails, return `bedrock_*` / `gateway_*` errors.
-   Never substitute deterministic results under a Bedrock or Gateway label.
-   `POST /api/orders/:id/review-compare` keeps a live failure on the live panel.
+   or `auto`, choose the first configured engine in this order: `deepseek` →
+   `ollama` → `ai_gateway` → `deterministic`. Bedrock is **not** on that list.
+   `REVIEW_ENGINE=bedrock` is the only way to call Bedrock, including in AWS mode.
+   If DeepSeek, Ollama, Bedrock, or Gateway is selected and misconfigured or the
+   call fails, return that engine's error. Never substitute deterministic results
+   under another engine's label. `POST /api/orders/:id/review-compare` keeps a live
+   failure on the live panel. Compare's live side uses the same preference and
+   includes Bedrock only when it was explicitly selected and credentialed.
 
 2. **SES honesty.** `submitEmail` success → `submit_succeeded` + MessageId only.
    `delivered` / `bounce` / `complaint` come only from `POST /api/aws/ses-events`
@@ -26,14 +29,21 @@ or writing `delivered` without an SES event, would look like integration while l
    `delivered`.
 
 3. **Inbound is not a public forge.** Prefer SES → S3 → Lambda calling
-   `handleInboundRecord`. Optional `POST /api/aws/inbound` requires
+   `handleInboundRecord`, or an OSS MTA posting raw MIME to `POST /api/inbound/email`
+   (label `email_inbound`, not `ses_inbound`). Both HTTP entry points require
    `INBOUND_WEBHOOK_SECRET`. Without the secret → 501. Browser/API message routes still
-   reject `source: ses_inbound`.
+   reject `source: ses_inbound` and `source: email_inbound`.
 
-4. **Dynamo when live.** `ORDERS_TABLE_NAME` + `AWS_REGION` + visible AWS credentials
-   select `DynamoOrderRepository` (SDK Get/Put, pk=orderId, full order JSON).
-   `health.dynamo` is true only then. A table name alone stays on the in-memory
-   store. SDK failures surface; no silent Memory write pretending durability.
+4. **Persistence.** `DATABASE_URL` selects Postgres. `PERSISTENCE=sqlite` selects the
+   SQLite file. Both win over DynamoDB. DynamoDB is the legacy path only when
+   `ORDERS_TABLE_NAME` + `AWS_REGION` + visible AWS credentials are all set and
+   neither Postgres nor SQLite was selected (`health.dynamo` is true only then;
+   `persistence` is `dynamodb`). A table name alone stays on the in-memory store.
+   Explicit `PERSISTENCE=postgres` or `dynamodb` without the required settings
+   fails closed. SDK failures surface; no silent Memory write pretending durability.
+   SMTP is the live mail path when `SMTP_HOST` and `SMTP_FROM` are set and does not
+   fall through to SES on failure. SES remains optional. Success is still
+   `submit_succeeded`, never an invented `delivered`.
 
 5. **Observability.** Review responses and `order.review_meta` carry `engine`,
    `bedrockRequestId` and/or gateway usage. `GET /api/health` exposes config booleans

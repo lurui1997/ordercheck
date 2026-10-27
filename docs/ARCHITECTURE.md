@@ -1,6 +1,6 @@
 # OrderCheck 架构
 
-版本：2026-10-25。有两条路径：现在就能公开跑通的演示路径，以及交接文档里的 AWS 目标路径。演示路径是实现；目标路径是接口和失败行为，不是已经接通的云资源。
+版本：2026-10-27。默认路径是 DEMO 确定性引擎，以及可自建的 DeepSeek/Ollama、SMTP、MinIO、Postgres/SQLite（见 [OSS_RUNTIME.md](./OSS_RUNTIME.md)）。AWS Bedrock / SES / DynamoDB / S3 是可选遗留路径，只在显式配置时调用。
 
 ## 业务流
 
