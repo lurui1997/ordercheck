@@ -14,7 +14,14 @@ vi.mock("ai", async () => {
 });
 
 import { generateText } from "ai";
-import { DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL, DeepSeekError, reviewWithDeepseek } from "@/lib/deepseek";
+import {
+  DEFAULT_DEEPSEEK_BASE_URL,
+  DEFAULT_DEEPSEEK_MODEL,
+  DEEPSEEK_SCHEMA_RULES,
+  DeepSeekError,
+  reviewWithDeepseek,
+  sanitizeDeepseekReview,
+} from "@/lib/deepseek";
 
 const reviewJson = JSON.stringify({
   issues: [
@@ -65,6 +72,10 @@ describe("reviewWithDeepseek", () => {
       model: { modelId: DEFAULT_DEEPSEEK_MODEL },
       temperature: 0,
     });
+    const call = vi.mocked(generateText).mock.calls[0]?.[0] as { system?: string; prompt?: string };
+    expect(call.system).toContain('kind: "missing" | "ambiguous" | "conflict"');
+    expect(call.prompt).toContain(DEEPSEEK_SCHEMA_RULES);
+    expect(call.prompt).toContain("resolution_evidence");
     expect(result.model).toBe("deepseek-chat");
     expect(result.payload.issues[0]?.issue_id).toBe("sample_version");
     expect(result.usage?.totalTokens).toBe(7);
@@ -100,6 +111,87 @@ describe("reviewWithDeepseek", () => {
     await expect(reviewWithDeepseek({ order: createOrderFromScenario(), apiKey: "sk-test" })).rejects.toMatchObject({
       code: "deepseek_call_failed",
       message: "unauthorized [redacted]",
+    });
+  });
+
+  it("normalizes a malformed DeepSeek payload before schema validation", async () => {
+    const malformed = {
+      issues: [
+        {
+          issue_id: "sample_version",
+          kind: "mismatch",
+          priority: "High",
+          title: "样品版本不一致",
+          evidence: { message_id: "m1", quote: "based on sample v2" },
+          impact: "版本不同",
+          question: "Which sample?",
+          status: "open",
+          waiting_for: "both parties",
+          resolution_evidence: null,
+        },
+        {
+          issue_id: "not-a-real-row",
+          kind: "totally-unknown",
+          priority: "high",
+          title: "丢掉",
+          evidence: [],
+          impact: "无法归一",
+          question: "?",
+          status: "open",
+          waiting_for: "buyer",
+          resolution_evidence: "none",
+        },
+      ],
+      facts: [
+        {
+          id: "quantity",
+          label: "数量",
+          value: "1,000 套",
+          status: "agreed",
+          evidence: [{ messageId: "m2", quote: "quantity 1,000 is confirmed" }],
+        },
+      ],
+    };
+    vi.mocked(generateText).mockResolvedValue({ text: JSON.stringify(malformed), usage: undefined } as never);
+
+    const direct = sanitizeDeepseekReview(malformed);
+    expect(direct?.droppedIssues).toBe(1);
+    expect(direct?.issues).toEqual([
+      expect.objectContaining({
+        issue_id: "sample_version",
+        kind: "conflict",
+        priority: "high",
+        status: "unconfirmed",
+        waiting_for: "both",
+        resolution_evidence: [],
+      }),
+    ]);
+
+    const result = await reviewWithDeepseek({
+      order: createOrderFromScenario(),
+      apiKey: "sk-test",
+    });
+    expect(result.payload.issues).toHaveLength(1);
+    expect(result.payload.issues[0]).toMatchObject({
+      issue_id: "sample_version",
+      kind: "conflict",
+      status: "unconfirmed",
+      waiting_for: "both",
+      resolution_evidence: [],
+    });
+    expect(result.payload.facts[0]).toMatchObject({ id: "quantity", status: "confirmed" });
+  });
+
+  it("keeps deepseek_invalid_output when no issue row can be repaired", async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: JSON.stringify({
+        issues: [{ kind: "not-an-enum", status: "???", waiting_for: 3, resolution_evidence: "nope" }],
+        facts: [],
+      }),
+      usage: undefined,
+    } as never);
+    await expect(reviewWithDeepseek({ order: createOrderFromScenario(), apiKey: "sk-test" })).rejects.toMatchObject({
+      code: "deepseek_invalid_output",
     });
   });
 
