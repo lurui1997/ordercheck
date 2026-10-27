@@ -9,13 +9,33 @@ vi.mock("@/lib/aws/bedrock", async () => {
   };
 });
 
+vi.mock("@/lib/aws/gateway", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/aws/gateway")>("@/lib/aws/gateway");
+  return {
+    ...actual,
+    reviewWithGateway: vi.fn(),
+  };
+});
+
+vi.mock("@/lib/deepseek", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/deepseek")>("@/lib/deepseek");
+  return {
+    ...actual,
+    reviewWithDeepseek: vi.fn(),
+  };
+});
+
 import { reviewWithBedrock, IntegrationError } from "@/lib/aws/bedrock";
+import { GatewayError, reviewWithGateway } from "@/lib/aws/gateway";
+import { DeepSeekError, reviewWithDeepseek } from "@/lib/deepseek";
 import { applyModelReview } from "@/lib/review/model-apply";
 import { ReviewOrchestrationError, runReview } from "@/lib/review/orchestrator";
 
 describe("runReview orchestration", () => {
   afterEach(() => {
     vi.mocked(reviewWithBedrock).mockReset();
+    vi.mocked(reviewWithGateway).mockReset();
+    vi.mocked(reviewWithDeepseek).mockReset();
   });
 
   it("uses deterministic engine in demo by default", async () => {
@@ -28,21 +48,92 @@ describe("runReview orchestration", () => {
 
   it("fails hard on bedrock errors without falling back to deterministic", async () => {
     vi.mocked(reviewWithBedrock).mockRejectedValue(new IntegrationError("bedrock_call_failed", "boom"));
-    await expect(
-      runReview(createOrderFromScenario(), {
-        APP_MODE: "aws",
-        AWS_REGION: "us-east-1",
-        BEDROCK_MODEL_ID: "amazon.nova-lite-v1:0",
-      }),
-    ).rejects.toBeInstanceOf(ReviewOrchestrationError);
+    const env = {
+      APP_MODE: "aws",
+      AWS_REGION: "us-east-1",
+      BEDROCK_MODEL_ID: "amazon.nova-lite-v1:0",
+      AWS_ACCESS_KEY_ID: "AKIA_TEST",
+      AWS_SECRET_ACCESS_KEY: "secret",
+    };
+    await expect(runReview(createOrderFromScenario(), env)).rejects.toBeInstanceOf(ReviewOrchestrationError);
+    await expect(runReview(createOrderFromScenario(), env)).rejects.toMatchObject({
+      code: "bedrock_call_failed",
+      engine: "bedrock",
+    });
+  });
 
+  it("does not call bedrock on auto when AWS credentials are absent", async () => {
+    const result = await runReview(createOrderFromScenario(), {
+      APP_MODE: "aws",
+      AWS_REGION: "us-east-1",
+      BEDROCK_MODEL_ID: "amazon.nova-lite-v1:0",
+    });
+    expect(result.engine).toBe("deterministic");
+    expect(reviewWithBedrock).not.toHaveBeenCalled();
+  });
+
+  it("labels a successful deepseek review as deepseek and stores token usage", async () => {
+    vi.mocked(reviewWithDeepseek).mockResolvedValue({
+      payload: {
+        issues: [
+          {
+            issue_id: "sample_version",
+            kind: "conflict",
+            priority: "high",
+            title: "样品版本不一致",
+            evidence: [
+              { message_id: "m1", quote: "based on sample v2" },
+              { message_id: "m3", quote: "based on sample v1" },
+            ],
+            impact: "版本不同",
+            question: "Which sample?",
+            status: "unconfirmed",
+            waiting_for: "both",
+            resolution_evidence: [],
+          },
+        ],
+        facts: [],
+      },
+      usage: { totalTokens: 9 },
+      model: "deepseek-chat",
+    });
+    const result = await runReview(createOrderFromScenario(), {
+      APP_MODE: "demo",
+      REVIEW_ENGINE: "deepseek",
+      DEEPSEEK_API_KEY: "sk-test",
+      AI_GATEWAY_API_KEY: "gateway-key",
+    });
+    expect(result.engine).toBe("deepseek");
+    expect(result.meta.engine).toBe("deepseek");
+    expect(result.meta.deepseekUsage?.totalTokens).toBe(9);
+    expect(result.meta.gatewayUsage).toBeUndefined();
+    expect(result.meta.bedrockRequestId).toBeUndefined();
+    expect(result.order.review_meta?.engine).toBe("deepseek");
+    expect(reviewWithGateway).not.toHaveBeenCalled();
+    expect(reviewWithBedrock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when deepseek fails", async () => {
+    vi.mocked(reviewWithDeepseek).mockRejectedValue(new DeepSeekError("deepseek_call_failed", "deepseek down"));
     await expect(
       runReview(createOrderFromScenario(), {
-        APP_MODE: "aws",
-        AWS_REGION: "us-east-1",
-        BEDROCK_MODEL_ID: "amazon.nova-lite-v1:0",
+        REVIEW_ENGINE: "deepseek",
+        DEEPSEEK_API_KEY: "sk-test",
       }),
-    ).rejects.toMatchObject({ code: "bedrock_call_failed", engine: "bedrock" });
+    ).rejects.toMatchObject({ code: "deepseek_call_failed", engine: "deepseek" });
+    expect(reviewWithGateway).not.toHaveBeenCalled();
+    expect(reviewWithBedrock).not.toHaveBeenCalled();
+  });
+
+  it("auto-selects gateway and fails loud instead of relabeling deterministic", async () => {
+    vi.mocked(reviewWithGateway).mockRejectedValue(new GatewayError("gateway_call_failed", "gateway down"));
+    await expect(
+      runReview(createOrderFromScenario(), {
+        APP_MODE: "demo",
+        AI_GATEWAY_API_KEY: "test-key",
+      }),
+    ).rejects.toMatchObject({ code: "gateway_call_failed", engine: "ai_gateway" });
+    expect(reviewWithBedrock).not.toHaveBeenCalled();
   });
 
   it("applies bedrock payload and stores review_meta request id", async () => {

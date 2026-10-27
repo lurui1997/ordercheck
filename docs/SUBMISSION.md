@@ -12,7 +12,9 @@ Use this as the Devpost / judge packet checklist.
 - [ ] **Demo video** — record workspace DEMO-001 loop + optional health/engine screenshot (attach on Devpost)
 - [ ] **ACE / team profile** — complete on Devpost as required by the hackathon
 - [x] **Deployed URL** — https://ordercheck-lurui1997s-projects.vercel.app (alias); `GET /api/health`
-- [x] **Health** — `/api/health` exposes mode, `reviewEngine`, bedrock/ses/dynamo/s3/gateway/inbound flags, `missing[]`
+- [x] **Health** — `/api/health` exposes mode, `reviewEngine`, `reviewEngineSelection`, `liveEngine`, `persistence`, bedrock/ses/dynamo/s3/gateway/deepseek/inbound flags, `missing[]`. `dynamo: true` only when table + region + credentials are set. `deepseek: true` only when `DEEPSEEK_API_KEY` is set.
+- [x] **Compare** — `POST /api/orders/:id/review-compare` and the **双引擎对比** button. Live unavailable stays labeled.
+- [x] **Eval** — `npm run eval` scores `lib/eval/fixtures.ts` (≥8 cases) with checklist pass plus micro precision/recall. Deterministic engine only.
 
 ## Problem
 
@@ -43,34 +45,48 @@ account-resource prerequisites). Runtime SDK map: [CDS_RUNTIME.md](./CDS_RUNTIME
 
 | Service | Code | Runtime |
 |---|---|---|
-| Bedrock Runtime Converse + tool | `lib/aws/bedrock.ts`, `lib/review/draft-model.ts` | When `REVIEW_ENGINE=bedrock` or AWS mode default + region/model |
+| Bedrock Runtime Converse + tool | `lib/aws/bedrock.ts`, `lib/review/draft-model.ts` | Explicit `REVIEW_ENGINE=bedrock`, or auto when Gateway is unset and region + model + AWS credentials exist |
 | SES SendEmail | `lib/aws/ses.ts` | When `AWS_MODE` + `SES_FROM_ADDRESS` + `AWS_REGION` |
-| SES inbound via S3 | `lib/aws/inbound.ts` + `infra/` | Lambda or `POST /api/aws/inbound` with secret |
+| SES inbound via S3 | `lib/aws/inbound.ts` + `infra/` | Lambda or `POST /api/aws/inbound` with secret. Buyer/seller replies merge evidence and advance only related issues |
 | SES delivery events | `lib/aws/ses-events.ts` + `infra/` | `POST /api/aws/ses-events` with secret |
-| DynamoDB | `lib/aws/repository.ts` + `infra/OrdersTable` | When `ORDERS_TABLE_NAME` set in AWS mode |
-| AI Gateway (non-CDS backup) | `lib/aws/gateway.ts` | When `REVIEW_ENGINE=gateway` + API key |
+| DynamoDB | `lib/aws/repository.ts` + `infra/OrdersTable` | `dynamo: true` only with `ORDERS_TABLE_NAME` + `AWS_REGION` + credentials. Otherwise memory |
+| AI Gateway (non-CDS backup) | `lib/aws/gateway.ts` | Auto when `AI_GATEWAY_API_KEY` is set, or explicit `REVIEW_ENGINE=gateway`. Labeled `ai_gateway` |
+| DeepSeek (OpenAI-compatible, non-CDS) | `lib/deepseek.ts` | `REVIEW_ENGINE=deepseek` or auto when Gateway is unset and `DEEPSEEK_API_KEY` is set. Labeled `deepseek` only. No silent deterministic draft fallback |
 
 ## How to demo (judges)
 
-1. Open the production URL → load **DEMO-001** → **开始核对** (deterministic or Gateway
-   depending on env) → inspect quote-backed issues.
-2. Call `GET /api/health` — see `reviewEngine`, `bedrock`/`ses`/`dynamo`/`s3`/`gateway`/
-   `inbound` booleans and `missing` list (no secrets).
-3. With Gateway or Bedrock configured: review again and screenshot the UI line
-   **引擎 + request id / tokens** under 待确认事项; generate confirmation email and
-   note `draftEngine` under the draft modal when a model path was used.
-4. Code walk: `lib/aws/ses.ts` `SendEmailCommand`, `lib/aws/bedrock.ts` `ConverseCommand`,
+1. Open the production URL → load **DEMO-001** → **开始核对**. Header badges show
+   `review:` (configured engine, `auto` or `explicit`) and, after a run, `ran:`
+   (the engine that actually returned). Do not treat a config flag as a completed call.
+2. Click **双引擎对比**. If live is not configured, the right column says
+   live unavailable and names the missing env vars; the left column is the
+   deterministic issue set (milestone, sample, inserts, shipping/payment).
+   Agreement stays `comparable: false` until a live call succeeds.
+3. Call `GET /api/health` — `reviewEngine`, `reviewEngineSelection`, `liveEngine`,
+   `persistence`, `bedrock`/`ses`/`dynamo`/`s3`/`gateway`/`inbound`, and `missing`
+   (no secrets). `dynamo: true` means the DynamoDB client is selected, not that a
+   write has already succeeded.
+4. From a checkout, run `npm run eval`. It scores the deterministic engine on
+   eight-plus fixtures (agreed quantity not re-asked, milestone mismatch, sample
+   mismatch, incomplete price, shipping/payment/acceptance gaps).
+5. With Gateway or Bedrock configured: review again and screenshot **引擎 + request id / tokens**
+   under 待确认事项 and the `ran:` badge; generate confirmation email and note
+   `draftEngine` under the draft modal when a model path was used. A failed live
+   review is an error, not a silent rule-engine result.
+6. Code walk: `lib/aws/ses.ts` `SendEmailCommand`, `lib/aws/bedrock.ts` `ConverseCommand`,
    `DynamoOrderRepository` `GetCommand`/`PutCommand`, inbound `GetObjectCommand`,
    plus `infra/template.yaml` for the mail pipeline.
-5. Optional AWS account: `sam deploy` from `infra/` (see infra README), set Vercel env
+7. Optional AWS account: `sam deploy` from `infra/` (see infra README), set Vercel env
    from stack outputs; send via UI (expect `submit_succeeded` only); feed SNS Delivery
    to `/api/aws/ses-events` for honest `delivered`.
 
 ## What’s live vs stub
 
-**Live in this deploy (typical Vercel demo):** deterministic DEMO-001 loop; AI Gateway
-review when env keys are set; health/config APIs; all adapter **source code** with
-real AWS SDK imports; SAM IaC under `infra/` for judges to review without deploying.
+**Live in this deploy (typical Vercel demo):** DEMO-001 loop. If `AI_GATEWAY_API_KEY`
+is set and `REVIEW_ENGINE` is unset, **开始核对** calls AI Gateway and the `ran:`
+badge says `ai_gateway`. Set `REVIEW_ENGINE=deterministic` to keep the offline rule
+engine. Compare, health, and eval are in the repo. Adapter **source** uses real AWS
+SDK imports; SAM IaC is under `infra/` for judges who are not deploying.
 
 **Needs your AWS account resources:** Bedrock model access + IAM, verified SES identity
 and configuration set, DynamoDB table, S3 raw-mail bucket + receipt rule, inbound

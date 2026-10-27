@@ -20,7 +20,7 @@ import {
   reviewOrder,
 } from "@/lib/review/engine";
 import { ambiguousReply, createOrderFromScenario, reopenReply, scriptedReplies } from "@/lib/scenario";
-import type { AgreementSummary, DecisionKind, EmailDraft, IssueStatus, Order, Role, RuntimeConfig } from "@/lib/types";
+import type { AgreementSummary, DecisionKind, EmailDraft, IssueStatus, Order, ReviewCompareResult, Role, RuntimeConfig } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "ordercheck.demo.v1";
@@ -58,10 +58,12 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
   const [emailOpen, setEmailOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [draft, setDraft] = useState<EmailDraft | null>(null);
-  const [draftEngine, setDraftEngine] = useState<"deterministic" | "bedrock" | "ai_gateway" | null>(null);
+  const [draftEngine, setDraftEngine] = useState<"deterministic" | "bedrock" | "ai_gateway" | "deepseek" | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [replyRole, setReplyRole] = useState<Role>("buyer");
   const [replyBody, setReplyBody] = useState("");
+  const [compare, setCompare] = useState<ReviewCompareResult | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
 
   useEffect(() => {
     try {
@@ -99,7 +101,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setNotice(message ?? null);
   }
 
-  function loadDemo() {
+  async function loadDemo() {
     setOrder(createOrderFromScenario());
     setAnchor(null);
     setDraft(null);
@@ -107,14 +109,35 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setEmailOpen(false);
     setSummaryOpen(false);
     setReplyBody("");
+    setCompare(null);
     setError(null);
-    setNotice("已加载 DEMO-001。三封邮件看起来像是谈过了，但还没有核对。");
     setPane("materials");
+    if (config.persistence !== "dynamodb") {
+      setNotice("已加载 DEMO-001。三封邮件看起来像是谈过了，但还没有核对。");
+      return;
+    }
+    setNotice("已在浏览器打开 DEMO-001，正在写入 DynamoDB…");
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fixture: "DEMO-001" }),
+      });
+      const data = (await response.json()) as { error?: { message?: string } };
+      if (!response.ok) {
+        setError(data.error?.message ?? "DynamoDB 写入失败。浏览器里的样例仍可核对，没有改标成已持久化。");
+        return;
+      }
+      setNotice("已加载 DEMO-001，并写入 DynamoDB（整单 JSON，含邮件与事项）。");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "DynamoDB 写入失败。浏览器里的样例仍可核对。");
+    }
   }
 
   async function onReview() {
     if (!order) return;
-    const needsRemote = config.reviewEngine === "bedrock" || config.reviewEngine === "ai_gateway";
+    const needsRemote =
+      config.reviewEngine === "bedrock" || config.reviewEngine === "ai_gateway" || config.reviewEngine === "deepseek";
     if (needsRemote) {
       setError(null);
       setNotice("正在调用核对引擎…");
@@ -130,12 +153,26 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
           notice?: string;
           bedrockRequestId?: string;
           gatewayUsage?: { totalTokens?: number };
-          meta?: { bedrockRequestId?: string; gatewayUsage?: { totalTokens?: number }; agentRetries?: number };
+          meta?: {
+            bedrockRequestId?: string;
+            gatewayUsage?: { totalTokens?: number };
+            deepseekUsage?: { totalTokens?: number };
+            agentRetries?: number;
+          };
           error?: { code?: string; message?: string };
         };
         if (!response.ok || !data.order) {
           setNotice(null);
-          setError(data.error?.message ?? "核对失败。");
+          setError(
+            `${data.error?.message ?? "核对失败。"} 没有回退到规则引擎。可用「双引擎对比」查看确定性结果；live 失败会单独标明。`,
+          );
+          return;
+        }
+        if (data.engine !== config.reviewEngine) {
+          setNotice(null);
+          setError(
+            `服务端返回引擎 ${data.engine ?? "unknown"}，与当前配置 ${config.reviewEngine} 不一致。没有采用该结果，避免把别的引擎标成当前引擎。`,
+          );
           return;
         }
         const requestId = data.bedrockRequestId ?? data.meta?.bedrockRequestId;
@@ -144,12 +181,20 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
             ? `核对引擎：Amazon Bedrock（真实模型调用，不是规则引擎）${requestId ? ` · request id ${requestId}` : ""}。`
             : data.engine === "ai_gateway"
               ? `核对引擎：Vercel AI Gateway（真实模型调用；不是 Bedrock，也不是规则引擎）${data.gatewayUsage?.totalTokens != null || data.meta?.gatewayUsage?.totalTokens != null ? ` · tokens ${data.gatewayUsage?.totalTokens ?? data.meta?.gatewayUsage?.totalTokens}` : ""}。`
-              : "核对引擎：确定性规则引擎。";
+              : data.engine === "deepseek"
+                ? `核对引擎：DeepSeek（OpenAI 兼容接口；不是 Bedrock，也不是 AI Gateway）${data.meta?.deepseekUsage?.totalTokens != null ? ` · tokens ${data.meta.deepseekUsage.totalTokens}` : ""}。`
+                : "核对引擎：确定性规则引擎。";
         commit(data.order, data.notice ? `${data.notice} ${engineNote}` : engineNote);
+        const persistence = (data as { persistence?: { ok?: boolean; store?: string; error?: string } }).persistence;
+        if (persistence && persistence.ok === false) {
+          setError(
+            `核对已完成（引擎 ${data.engine}），但写入 ${persistence.store ?? "store"} 失败：${persistence.error ?? "未知错误"}。没有改用内存库冒充成功。`,
+          );
+        }
         setPane("issues");
       } catch (error) {
         setNotice(null);
-        setError(error instanceof Error ? error.message : "核对请求失败。");
+        setError(error instanceof Error ? error.message : "核对请求失败。没有改用规则引擎结果。");
       }
       return;
     }
@@ -159,8 +204,36 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       setError(result.error);
       return;
     }
-    commit(result.order, "核对完成。每条引用都能在左侧原文定位。核对引擎：确定性规则引擎（不是 Bedrock / AI Gateway）。");
+    commit(
+      { ...result.order, review_meta: { engine: "deterministic", reviewedAt: new Date().toISOString() } },
+      "核对完成。每条引用都能在左侧原文定位。核对引擎：确定性规则引擎（不是 Bedrock / AI Gateway）。",
+    );
     setPane("issues");
+  }
+
+  async function onCompare() {
+    if (!order) return;
+    setCompareBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/orders/${order.id}/review-compare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order }),
+      });
+      const data = (await response.json()) as ReviewCompareResult & { error?: { message?: string } };
+      if (!response.ok || !data.deterministic) {
+        setError(data.error?.message ?? "对比失败。");
+        return;
+      }
+      setCompare(data);
+      setNotice("对比完成。当前订单的事项没有被 live 结果覆盖。live 失败或未配置会单独显示，不会标成规则引擎。");
+      setPane("issues");
+    } catch (compareError) {
+      setError(compareError instanceof Error ? compareError.message : "对比请求失败。");
+    } finally {
+      setCompareBusy(false);
+    }
   }
 
   function locate(messageId: string, quote: string) {
@@ -188,12 +261,19 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       });
       const data = (await response.json()) as {
         draft?: EmailDraft;
-        draftEngine?: "deterministic" | "bedrock" | "ai_gateway";
+        draftEngine?: "deterministic" | "bedrock" | "ai_gateway" | "deepseek";
         notice?: string;
         error?: { code?: string; message?: string };
       };
+      if (config.reviewEngine === "deepseek" && (!response.ok || !data.draft || data.draftEngine !== "deepseek")) {
+        setDraft(null);
+        setDraftEngine(null);
+        setEmailOpen(false);
+        setError(data.error?.message ?? "DeepSeek 草稿失败。没有改用确定性模板，也没有标成 Bedrock 或 AI Gateway。");
+        return;
+      }
       if (!response.ok || !data.draft) {
-        // Client deterministic fallback — always labeled deterministic, never bedrock.
+        // Client deterministic fallback — always labeled deterministic, never bedrock or deepseek.
         setDraft(buildDraft(order, issueIds));
         setDraftEngine("deterministic");
         setError(data.error?.message ?? "生成草稿失败，已使用确定性模板。");
@@ -205,9 +285,16 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
         setNotice(data.notice);
       }
     } catch (error) {
-      setDraft(buildDraft(order, issueIds));
-      setDraftEngine("deterministic");
-      setError(error instanceof Error ? error.message : "生成草稿失败，已使用确定性模板。");
+      if (config.reviewEngine === "deepseek") {
+        setDraft(null);
+        setDraftEngine(null);
+        setEmailOpen(false);
+        setError(error instanceof Error ? error.message : "DeepSeek 草稿失败。没有改用确定性模板。");
+      } else {
+        setDraft(buildDraft(order, issueIds));
+        setDraftEngine("deterministic");
+        setError(error instanceof Error ? error.message : "生成草稿失败，已使用确定性模板。");
+      }
     } finally {
       setDraftBusy(false);
     }
@@ -352,12 +439,14 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
               {config.modeLabel}
             </span>
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
-              review:{" "}
-              {config.reviewEngine === "bedrock"
-                ? "bedrock"
-                : config.reviewEngine === "ai_gateway"
-                  ? "ai_gateway"
-                  : "deterministic"}
+              review: {config.reviewEngine}
+              {config.reviewEngineSelection === "auto" ? " · auto" : " · explicit"}
+            </span>
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
+              ran: {order?.review_meta?.engine ?? "—"}
+            </span>
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
+              store: {config.persistence}
             </span>
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-[#f6f1e6]">
               ses: {config.sesLive ? "live" : "recorded"}
@@ -377,14 +466,9 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
         <section className="rounded-2xl bg-[#f6f1e6] p-4 shadow-[0_24px_60px_rgba(0,0,0,0.28)] sm:p-6">
           {config.mode === "aws" || config.reviewEngine !== "deterministic" || config.sesLive ? (
             <p role="status" className="mb-4 rounded-md border border-[#c4452d]/40 bg-[#fde8e4] px-3 py-2 text-sm leading-6 text-[#7d2b1d]">
-              {config.modeLabel} · 核对引擎{" "}
-              <strong>
-                {config.reviewEngine === "bedrock"
-                  ? "bedrock"
-                  : config.reviewEngine === "ai_gateway"
-                    ? "ai_gateway"
-                    : "deterministic"}
-              </strong>
+              {config.modeLabel} · 核对引擎 <strong>{config.reviewEngine}</strong>
+              （{config.reviewEngineSelection === "auto" ? "auto：Gateway，其次 DeepSeek，再次有凭证的 Bedrock，否则规则引擎" : "显式 REVIEW_ENGINE"}）
+              · 存储 <strong>{config.persistence}</strong>
               · SES {config.sesLive ? "真发信（submit_succeeded ≠ 已投递）" : "仅记录未发送"}。
               {config.missing.length ? ` 还缺 ${config.missing.join("、")}。` : ""}
               {config.reviewEngine === "bedrock" && !config.bedrockConfigured
@@ -392,6 +476,9 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                 : ""}
               {config.reviewEngine === "ai_gateway" && !config.gatewayConfigured
                 ? " AI Gateway 尚未配置 AI_GATEWAY_API_KEY。"
+                : ""}
+              {config.reviewEngine === "deepseek" && !config.deepseekConfigured
+                ? " DeepSeek 尚未配置 DEEPSEEK_API_KEY。开始核对会返回明确错误，不会回退到规则引擎，也不会标成 Bedrock 或 AI Gateway。"
                 : ""}
             </p>
           ) : null}
@@ -432,6 +519,9 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                     重新加载样例
                   </Button>
                   <Button onClick={() => void onReview()}>{order.reviewed ? "再核对一次" : "开始核对"}</Button>
+                  <Button variant="outline" onClick={() => void onCompare()} disabled={compareBusy}>
+                    {compareBusy ? "对比中…" : "双引擎对比"}
+                  </Button>
                   <Button variant="vermilion" onClick={openEmail} disabled={!order.reviewed}>
                     生成确认邮件
                   </Button>
@@ -449,6 +539,8 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                   待确认事项
                 </Button>
               </div>
+
+              {compare ? <ComparePanel result={compare} /> : null}
 
               <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.9fr)]">
                 <div className={cn(pane !== "materials" && "hidden", "space-y-4 lg:block")}>
@@ -492,6 +584,9 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                         {order.review_meta.bedrockRequestId ? ` · request id ${order.review_meta.bedrockRequestId}` : ""}
                         {order.review_meta.gatewayUsage?.totalTokens != null
                           ? ` · gateway tokens ${order.review_meta.gatewayUsage.totalTokens}`
+                          : ""}
+                        {order.review_meta.deepseekUsage?.totalTokens != null
+                          ? ` · deepseek tokens ${order.review_meta.deepseekUsage.totalTokens}`
                           : ""}
                         {order.review_meta.agentRetries ? ` · agent retry ${order.review_meta.agentRetries}` : ""}
                       </p>
@@ -541,7 +636,9 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                 draftEngine: {draftEngine}
                 {draftEngine === "bedrock"
                   ? " · Amazon Bedrock 生成（可编辑）"
-                  : " · Vercel AI Gateway 生成（可编辑；不是 Bedrock）"}
+                  : draftEngine === "deepseek"
+                    ? " · DeepSeek 生成（可编辑；不是 Bedrock，也不是 AI Gateway）"
+                    : " · Vercel AI Gateway 生成（可编辑；不是 Bedrock）"}
                 {draftBusy ? " · 更新中…" : ""}
               </p>
             ) : draftBusy ? (
@@ -640,6 +737,54 @@ function FactStrip({ order }: { order: Order }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function ComparePanel({ result }: { result: ReviewCompareResult }) {
+  const liveTitle = result.live.engine ?? "live unavailable";
+  return (
+    <div className="mt-4 rounded-lg border border-[#eadfcd] bg-[#fffdf8] p-3">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-[#1c2430]">双引擎对比</h2>
+        <p className="text-xs leading-5 text-[#5c6775]">
+          {result.agreement.comparable
+            ? `事项一致率 Jaccard ${result.agreement.jaccard?.toFixed(2)} · 共有 ${result.agreement.shared.length} · 仅规则 ${result.agreement.onlyDeterministic.length} · 仅 live ${result.agreement.onlyLive.length} · 状态不同 ${result.agreement.statusMismatches.length}`
+            : "live 没有成功跑完，不算成分歧。规则引擎结果仍列在左侧。"}
+        </p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <CompareColumn title="确定性规则引擎" side={result.deterministic} />
+        <CompareColumn title={liveTitle} side={result.live} />
+      </div>
+    </div>
+  );
+}
+
+function CompareColumn({ title, side }: { title: string; side: ReviewCompareResult["deterministic"] }) {
+  return (
+    <div className="rounded-md border border-[#eadfcd] bg-white p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[#8a5a12]">{title}</p>
+      <p className="mt-1 text-xs leading-5 text-[#5c6775]">
+        {side.available ? (side.ran ? `engine ${side.engine ?? "—"} · ${side.ok ? "ok" : "failed"}` : "未调用") : "live unavailable"}
+      </p>
+      {side.error ? <p className="mt-2 text-sm leading-6 text-[#7d2b1d]">{side.error}</p> : null}
+      {side.missing && side.missing.length > 0 ? (
+        <p className="mt-2 text-xs leading-5 text-[#5c6775]">缺少配置：{side.missing.join("、")}。没有填写值，也没有发起调用。</p>
+      ) : null}
+      {side.issues.length > 0 ? (
+        <ul className="mt-2 space-y-1">
+          {side.issues.map((issue) => (
+            <li key={issue.issue_id} className="text-sm leading-5 text-[#1c2430]">
+              <span className="font-semibold">{issue.issue_id}</span>
+              <span className="text-[#5c6775]"> · {issue.status} · {issue.kind}</span>
+              <span className="block text-xs text-[#5c6775]">{issue.title}</span>
+            </li>
+          ))}
+        </ul>
+      ) : side.ok ? (
+        <p className="mt-2 text-sm text-[#5c6775]">没有事项。</p>
+      ) : null}
+    </div>
   );
 }
 

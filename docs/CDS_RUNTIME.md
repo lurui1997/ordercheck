@@ -15,27 +15,35 @@ see [`infra/README.md`](../infra/README.md).
 | AWS SDK package | Runtime file | Entry | Command / API | When it runs |
 |---|---|---|---|---|
 | `@aws-sdk/client-ses` | `lib/aws/ses.ts` | `submitEmail` | `SESClient` + `SendEmailCommand` | `AWS_MODE` + `SES_FROM_ADDRESS` + `AWS_REGION`; called from `POST /api/orders/:id/send` |
-| `@aws-sdk/client-bedrock-runtime` | `lib/aws/bedrock.ts` | `reviewWithBedrock` | `BedrockRuntimeClient` + `ConverseCommand` (tool `submit_order_review`; optional 1 agent retry) | `REVIEW_ENGINE=bedrock` or AWS-mode default, with `AWS_REGION` + `BEDROCK_MODEL_ID`; `POST /api/orders/:id/review` via `lib/review/orchestrator.ts` |
+| `@aws-sdk/client-bedrock-runtime` | `lib/aws/bedrock.ts` | `reviewWithBedrock` | `BedrockRuntimeClient` + `ConverseCommand` (tool `submit_order_review`; optional 1 agent retry) | Explicit `REVIEW_ENGINE=bedrock`, or auto when Gateway is unset and `AWS_REGION` + `BEDROCK_MODEL_ID` + AWS credentials are set. `POST /api/orders/:id/review` and the live half of `POST /api/orders/:id/review-compare` |
 | `@aws-sdk/client-bedrock-runtime` | `lib/review/draft-model.ts` | `draftWithModel` → `draftWithBedrock` | `ConverseCommand` (tool `submit_confirmation_email_draft`) | Same Bedrock env; `POST /api/orders/:id/email-draft`. **On failure falls back to deterministic `buildDraft` and labels `draftEngine: deterministic` — never “bedrock”.** |
 | `@aws-sdk/client-s3` | `lib/aws/inbound.ts` | `handleInboundRecord` | `S3Client` + `GetObjectCommand` | Inbound path with bucket/key; `POST /api/aws/inbound` or Lambda forwarder in `infra/` |
-| `@aws-sdk/client-dynamodb` + `@aws-sdk/lib-dynamodb` | `lib/aws/repository.ts` | `DynamoOrderRepository.get` / `.save` | `DynamoDBDocumentClient` + `GetCommand` / `PutCommand` | When `ORDERS_TABLE_NAME` (+ `AWS_REGION`) set; selected by `createOrderRepository()` |
+| `@aws-sdk/client-dynamodb` + `@aws-sdk/lib-dynamodb` | `lib/aws/repository.ts` | `DynamoOrderRepository.get` / `.save` | `DynamoDBDocumentClient` + `GetCommand` / `PutCommand` | Only when `ORDERS_TABLE_NAME` + `AWS_REGION` + AWS credentials are all set (`health.dynamo === true`, `persistence: "dynamodb"`). Otherwise `MemoryOrderRepository`. One item per order (`pk`, full JSON including messages and issues). |
 
 ## Non-CDS backup (honest label)
 
 | Package | File | Label |
 |---|---|---|
 | `@ai-sdk/gateway` + `ai` | `lib/aws/gateway.ts`, `lib/review/draft-model.ts` | Engine / `draftEngine` = **`ai_gateway`** — never presented as Bedrock |
+| `@ai-sdk/openai` chat completions + `ai` | `lib/deepseek.ts` | Engine / `draftEngine` = **`deepseek`**. OpenAI-compatible `DEEPSEEK_BASE_URL` (default `https://api.deepseek.com/v1`). Never labeled bedrock or ai_gateway. Draft failures throw; they do not substitute the deterministic template. |
 
 ## Route → adapter wiring
 
 ```
 POST /api/orders/:id/review
   → lib/review/orchestrator.ts runReview
-  → lib/aws/bedrock.ts  OR  lib/aws/gateway.ts  OR  lib/review/engine.ts
+  → lib/aws/bedrock.ts  OR  lib/aws/gateway.ts  OR  lib/deepseek.ts  OR  lib/review/engine.ts
+  → repository.save (DynamoDB only when live; save errors are returned as persistence.ok=false)
+
+POST /api/orders/:id/review-compare
+  → lib/review/compare.ts compareReviews
+  → deterministic reviewOrder AND, if configured, one live engine
+  → does not save; live failure is not copied from the rule engine
 
 POST /api/orders/:id/email-draft
   → lib/review/draft-model.ts draftWithModel
-  → Bedrock / Gateway / deterministic buildDraft (+ draftEngine)
+  → Bedrock / Gateway / DeepSeek / deterministic buildDraft (+ draftEngine)
+  → DeepSeek errors return 501/502 and do not include a deterministic draft
 
 POST /api/orders/:id/send
   → lib/aws/ses.ts submitEmail   (AWS live)
@@ -53,11 +61,19 @@ POST /api/aws/ses-events
 1. Open `package.json` → confirm `@aws-sdk/client-ses`, `client-bedrock-runtime`, `client-s3`, `client-dynamodb`, `lib-dynamodb`.
 2. Open each file in the table above → search for `from "@aws-sdk/..."` and `client.send(`.
 3. Run `npm test` → `lib/aws/sdk-surface.test.ts` must pass.
-4. Call `GET /api/health` on the deployed URL → see `reviewEngine` and capability booleans (no secrets).
-5. Optional: read `infra/template.yaml` for SES→S3→Lambda→app and DynamoDB/IAM definitions.
+4. Call `GET /api/health` on the deployed URL. Field meanings:
+   - `reviewEngine` / `reviewEngineSelection`: engine that **will** run (`auto` = gateway, else bedrock when credentials exist, else deterministic; `explicit` = `REVIEW_ENGINE` override). Not proof a call succeeded.
+   - `liveEngine`: gateway if `AI_GATEWAY_API_KEY` is set, else bedrock if region + model + credentials are set, else `null`.
+   - `bedrock` / `gateway` / `deepseek` / `ses` / `s3` / `inbound`: configuration present. `deepseek: true` means `DEEPSEEK_API_KEY` is set, not that a call succeeded. `sesLive` is the real SendEmail path.
+   - `dynamo`: `true` only when the DynamoDB client will be used (table + region + credentials). `persistence` is `dynamodb` or `memory`.
+   - `missing`: AWS-mode env **names** still empty. Never values.
+5. `npm run eval` — deterministic checklist, precision, and recall. Not a Bedrock score.
+6. `POST /api/orders/:id/review-compare` — side-by-side issues. `live.available: false` lists missing config and does not call a model.
+7. Optional: read `infra/template.yaml` for SES→S3→Lambda→app and DynamoDB/IAM definitions.
 
 ## Honesty rules (also ADR-005)
 
 - SendEmail success ⇒ `submit_succeeded` only; **delivered** only from SES events.
-- Bedrock/Gateway review failures ⇒ HTTP 501/502; **no** silent rule-engine results labeled as Bedrock.
+- Bedrock/Gateway review failures ⇒ HTTP 501/502; **no** silent rule-engine results labeled as Bedrock. Compare keeps the failure on the live panel (`agreement.comparable: false`).
+- Auto engine order is Gateway, then DeepSeek when `DEEPSEEK_API_KEY` is set, then Bedrock with visible credentials, then deterministic. Explicit `REVIEW_ENGINE=deepseek` wins even if a Gateway key is also present. DeepSeek failures stay `deepseek_*` and are not relabeled.
 - Draft model failures ⇒ deterministic fallback with `draftEngine: "deterministic"`.

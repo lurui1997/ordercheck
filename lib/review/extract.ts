@@ -38,10 +38,13 @@ export function extractStances(message: Message): Stance[] {
     found.push(stance(message, "sample", "v1", "offer", substitute, true));
   } else {
     const confirmV2 = quote(body, /we confirm sample v2/i);
+    const acceptV2 = quote(body, /we accept sample v2/i);
     const pleaseV2 = quote(body, /please use sample v2/i);
     const basedV2 = quote(body, /based on sample v2/i);
     const basedV1 = quote(body, /based on sample v1/i);
+    const withV2 = quote(body, /with sample v2/i);
     if (confirmV2) found.push(stance(message, "sample", "v2", "accept", confirmV2));
+    else if (acceptV2) found.push(stance(message, "sample", "v2", "accept", acceptV2));
     else if (acceptOffer && body.includes("sample v2")) {
       found.push(stance(message, "sample", "v2", "accept", "sample v2"));
     } else if (pleaseV2) found.push(stance(message, "sample", "v2", "request", pleaseV2));
@@ -49,16 +52,21 @@ export function extractStances(message: Message): Stance[] {
       found.push(stance(message, "sample", "v2", message.from_role === "seller" ? "offer" : "request", basedV2));
     } else if (basedV1) {
       found.push(stance(message, "sample", "v1", message.from_role === "buyer" ? "request" : "offer", basedV1));
+    } else if (withV2) {
+      found.push(stance(message, "sample", "v2", message.from_role === "seller" ? "offer" : "request", withV2));
     }
   }
 
   const london = quote(body, /delivery at LONDON-DEMO-ADDRESS by 20 November 2026/);
   const londonRequest = quote(body, /delivered to our London warehouse by 20 November 2026/);
+  const londonImperative = quote(body, /deliver to our London warehouse by 20 November 2026/i);
   const shanghai = quote(body, /ready for collection in Shanghai on 20 November 2026/);
   if (london) {
     found.push(stance(message, "delivery", "london_delivery_2026-11-20", acceptOffer ? "accept" : "offer", london));
   } else if (londonRequest) {
     found.push(stance(message, "delivery", "london_delivery_2026-11-20", "request", londonRequest));
+  } else if (londonImperative) {
+    found.push(stance(message, "delivery", "london_delivery_2026-11-20", "request", londonImperative));
   }
   if (shanghai) {
     found.push(stance(message, "delivery", "shanghai_collection_2026-11-20", "offer", shanghai));
@@ -67,10 +75,13 @@ export function extractStances(message: Message): Stance[] {
   const setOffer = quote(body, /each including one box and one protective insert, at USD 2\.60 per set/);
   const setAccept = acceptOffer ? quote(body, /1,000 sets with protective inserts at USD 2\.60 per set/) : null;
   const insertsRequest = quote(body, /including the protective inserts/);
+  const insertsWith = quote(body, /with protective inserts/i);
   if (setOffer) found.push(stance(message, "inserts", "box_plus_insert_usd_2.60", "offer", setOffer));
   if (setAccept) found.push(stance(message, "inserts", "box_plus_insert_usd_2.60", "accept", setAccept));
   if (!setOffer && !setAccept && insertsRequest) {
     found.push(stance(message, "inserts", "inserts_requested", "request", insertsRequest));
+  } else if (!setOffer && !setAccept && insertsWith) {
+    found.push(stance(message, "inserts", "inserts_requested", "request", insertsWith));
   }
 
   const shipOffer = quote(body, /Shipping is an additional USD 300/);

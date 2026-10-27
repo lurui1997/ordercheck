@@ -1,5 +1,7 @@
 import type { Order } from "@/lib/types";
 
+/** Process-local demo store. Used only when DynamoDB credentials and table env are absent. */
+
 const globalStore = globalThis as typeof globalThis & {
   __ordercheckOrders?: Map<string, Order>;
 };

@@ -121,6 +121,12 @@ export interface ReviewMeta {
     outputTokens?: number;
     totalTokens?: number;
   };
+  /** Token counts from DeepSeek. Never copy these into gatewayUsage or a Bedrock request id. */
+  deepseekUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
   agentRetries?: number;
   reviewedAt?: string;
 }
@@ -212,7 +218,11 @@ export type EngineResult =
   | { ok: true; order: Order; notice?: string }
   | { ok: false; order: Order; error: string };
 
-export type ReviewEngine = "deterministic" | "bedrock" | "ai_gateway";
+export type ReviewEngine = "deterministic" | "bedrock" | "ai_gateway" | "deepseek";
+
+export type ReviewEngineSelection = "explicit" | "auto";
+
+export type PersistenceKind = "memory" | "dynamodb";
 
 export interface RuntimeConfig {
   mode: AppMode;
@@ -220,11 +230,67 @@ export interface RuntimeConfig {
   missing: string[];
   bedrockConfigured: boolean;
   gatewayConfigured: boolean;
+  /** True only when DEEPSEEK_API_KEY is set. Not proof a call succeeded. */
+  deepseekConfigured: boolean;
   sesConfigured: boolean;
   /** True only when AWS_MODE and SES_FROM_ADDRESS + AWS_REGION are set — real SendEmail path. */
   sesLive: boolean;
+  /**
+   * True only when the process will use DynamoDB: table name, region, and
+   * visible AWS credentials. A table name alone stays false and uses memory.
+   */
   dynamoConfigured: boolean;
+  /** Which order store `createOrderRepository()` will actually construct. */
+  persistence: PersistenceKind;
   s3Configured: boolean;
   inboundConfigured: boolean;
   reviewEngine: ReviewEngine;
+  /** `explicit` when REVIEW_ENGINE names an engine; `auto` when unset or `auto`. */
+  reviewEngineSelection: ReviewEngineSelection;
+  /**
+   * Live engine available for compare / preference: gateway if configured,
+   * else bedrock if region + model id are set, else null.
+   * Independent of an explicit deterministic override.
+   */
+  liveEngine: ReviewEngine | null;
+}
+
+export interface CompareIssueView {
+  issue_id: string;
+  title: string;
+  status: IssueStatus;
+  kind: IssueKind;
+  priority: Priority;
+}
+
+export interface CompareSide {
+  /** False when no gateway key and no Bedrock region/model — the call was not attempted. */
+  available: boolean;
+  /** True only after a live call returned or threw. False when unavailable. */
+  ran: boolean;
+  engine: ReviewEngine | null;
+  ok: boolean;
+  issues: CompareIssueView[];
+  notice?: string;
+  error?: string;
+  code?: string;
+  /** Env names still required. Never values. */
+  missing?: string[];
+}
+
+export interface ReviewAgreement {
+  /** False when the live side did not succeed — do not treat empty issues as disagreement. */
+  comparable: boolean;
+  shared: string[];
+  onlyDeterministic: string[];
+  onlyLive: string[];
+  statusMismatches: Array<{ issue_id: string; deterministic: IssueStatus; live: IssueStatus }>;
+  /** Issue-id Jaccard, or null when not comparable. */
+  jaccard: number | null;
+}
+
+export interface ReviewCompareResult {
+  deterministic: CompareSide;
+  live: CompareSide;
+  agreement: ReviewAgreement;
 }

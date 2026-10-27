@@ -13,10 +13,12 @@ or writing `delivered` without an SES event, would look like integration while l
 
 ## Decision
 
-1. **Engine selection is explicit.** `REVIEW_ENGINE` or AWS-mode default chooses
-   `bedrock` / `ai_gateway` / `deterministic`. If Bedrock or Gateway is selected and
-   misconfigured or the SDK fails, return `bedrock_*` / `gateway_*` errors. Never
-   substitute deterministic results under a Bedrock or Gateway label.
+1. **Engine selection is labeled.** Explicit `REVIEW_ENGINE` wins. When it is unset
+   or `auto`, prefer AI Gateway if configured, else Bedrock if region, model id, and
+   AWS credentials are visible, else deterministic. If Bedrock or Gateway is selected
+   and misconfigured or the call fails, return `bedrock_*` / `gateway_*` errors.
+   Never substitute deterministic results under a Bedrock or Gateway label.
+   `POST /api/orders/:id/review-compare` keeps a live failure on the live panel.
 
 2. **SES honesty.** `submitEmail` success → `submit_succeeded` + MessageId only.
    `delivered` / `bounce` / `complaint` come only from `POST /api/aws/ses-events`
@@ -28,9 +30,10 @@ or writing `delivered` without an SES event, would look like integration while l
    `INBOUND_WEBHOOK_SECRET`. Without the secret → 501. Browser/API message routes still
    reject `source: ses_inbound`.
 
-4. **Dynamo when configured.** `ORDERS_TABLE_NAME` selects `DynamoOrderRepository`
-   (SDK Get/Put, pk=orderId). Failures surface; no silent Memory write pretending
-   durability.
+4. **Dynamo when live.** `ORDERS_TABLE_NAME` + `AWS_REGION` + visible AWS credentials
+   select `DynamoOrderRepository` (SDK Get/Put, pk=orderId, full order JSON).
+   `health.dynamo` is true only then. A table name alone stays on the in-memory
+   store. SDK failures surface; no silent Memory write pretending durability.
 
 5. **Observability.** Review responses and `order.review_meta` carry `engine`,
    `bedrockRequestId` and/or gateway usage. `GET /api/health` exposes config booleans

@@ -7,6 +7,7 @@ import {
 import { createGateway } from "@ai-sdk/gateway";
 import { generateText } from "ai";
 import { getRuntimeConfig } from "@/lib/aws/config";
+import { DeepSeekError, draftWithDeepseek } from "@/lib/deepseek";
 import { buildDraft } from "@/lib/review/draft";
 import type { EmailDraft, Order, ReviewEngine, RuntimeConfig } from "@/lib/types";
 
@@ -178,9 +179,9 @@ async function draftWithGateway(order: Order, issueIds: string[], env: EnvLike):
 
 /**
  * Optional LLM path for confirmation email drafts.
- * When REVIEW_ENGINE is bedrock/gateway and configured, tries the model;
- * on any failure falls back to deterministic buildDraft and labels draftEngine
- * as "deterministic" (never as bedrock).
+ * Bedrock and AI Gateway failures fall back to deterministic buildDraft and
+ * label draftEngine as "deterministic".
+ * DeepSeek failures throw DeepSeekError and do not substitute that template.
  */
 export async function draftWithModel(
   order: Order,
@@ -202,6 +203,28 @@ export async function draftWithModel(
         notice: `Bedrock draft failed (${message}); fell back to deterministic buildDraft.`,
       };
     }
+  }
+
+  if (engine === "deepseek") {
+    if (!config.deepseekConfigured) {
+      throw new DeepSeekError(
+        "deepseek_not_configured",
+        "需要 DeepSeek 草稿，但缺少 DEEPSEEK_API_KEY。没有调用模型，也没有改用确定性模板。",
+      );
+    }
+    const draft = await draftWithDeepseek({
+      order,
+      issueIds,
+      apiKey: env.DEEPSEEK_API_KEY ?? "",
+      baseURL: env.DEEPSEEK_BASE_URL,
+      model: env.DEEPSEEK_MODEL,
+      prompt: buildDraftPrompt(order, issueIds),
+    });
+    return {
+      draft,
+      draftEngine: "deepseek" as const,
+      notice: "Confirmation draft generated with DeepSeek (not Bedrock, not AI Gateway).",
+    };
   }
 
   if (engine === "ai_gateway" && config.gatewayConfigured) {
