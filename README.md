@@ -8,7 +8,8 @@
 
 ## 生产地址
 
-- 稳定别名：[https://ordercheck-lurui1997s-projects.vercel.app](https://ordercheck-lurui1997s-projects.vercel.app)
+- 产品介绍：[https://ordercheck-lurui1997s-projects.vercel.app](https://ordercheck-lurui1997s-projects.vercel.app)
+- 工作台：[https://ordercheck-lurui1997s-projects.vercel.app/workspace](https://ordercheck-lurui1997s-projects.vercel.app/workspace)
 - 健康检查：`GET /api/health`
 - 提交清单：[docs/SUBMISSION.md](docs/SUBMISSION.md)
 
@@ -19,7 +20,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 [http://127.0.0.1:43123](http://127.0.0.1:43123)。
+浏览器打开 [http://127.0.0.1:43123](http://127.0.0.1:43123) 看产品介绍。工作台在 [http://127.0.0.1:43123/workspace](http://127.0.0.1:43123/workspace)。
 
 ```bash
 npm test
@@ -28,7 +29,7 @@ npm run build
 
 ## 三分钟演示
 
-1. 打开工作台，看清这是发确认之前的核对，不是已经成交。
+1. 打开 [/workspace](http://127.0.0.1:43123/workspace)，看清这是发确认之前的核对，不是已经成交。
 2. 点击「加载 DEMO-001」。左侧是三封英文邮件，右侧还没有结论。
 3. 点击「开始核对」。确认三个重要问题，并点引用回到原文：
    - 11 月 20 日同时出现，但一个是伦敦到货，一个是上海提货。

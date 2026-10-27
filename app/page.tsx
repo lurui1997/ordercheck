@@ -1,8 +1,19 @@
-import { Workspace } from "@/components/workspace";
-import { getRuntimeConfig } from "@/lib/aws/config";
+import { Noto_Sans_SC } from "next/font/google";
+import { LandingPage } from "@/components/landing/landing-page";
 
-export const dynamic = "force-dynamic";
+const noto = Noto_Sans_SC({
+  subsets: ["latin"],
+  weight: ["400", "600"],
+  display: "swap",
+  preload: false,
+  adjustFontFallback: false,
+  fallback: ["PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", "sans-serif"],
+});
 
 export default function HomePage() {
-  return <Workspace config={getRuntimeConfig()} />;
+  return (
+    <div className={`${noto.className} bg-white text-base text-ink antialiased selection:bg-accent-soft`}>
+      <LandingPage />
+    </div>
+  );
 }
