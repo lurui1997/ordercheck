@@ -11,7 +11,7 @@ Use this as the Devpost / judge packet checklist.
 - [x] **Honest AI labeling** — `REVIEW_ENGINE` / `draftEngine`: `deepseek` | `ollama` | `ai_gateway` | `deterministic` | `bedrock` (bedrock only when explicitly selected)
 - [ ] **Demo video** — record workspace DEMO-001 loop + optional health/engine screenshot (attach on Devpost)
 - [ ] **ACE / team profile** — complete on Devpost as required by the hackathon
-- [x] **Deployed URL** — https://ordercheck-lurui1997s-projects.vercel.app (alias); `GET /api/health`
+- [x] **Deployed URL** — https://ordercheck-lurui1997s-projects.vercel.app (product intro); workspace at `/workspace`; `GET /api/health`
 - [x] **Health** — `/api/health` exposes mode, `reviewEngine`, `reviewEngineSelection`, `liveEngine`, `persistence`, `objectStore`, bedrock/deepseek/ollama/ses/sesLive/smtp/dynamo/s3/gateway/inbound flags, `missing[]`. `dynamo: true` only when table + region + credentials are set. `deepseek: true` only when `DEEPSEEK_API_KEY` is set. `smtp: true` only when host and from are set.
 - [x] **Compare** — `POST /api/orders/:id/review-compare` and the **双引擎对比** button. Live unavailable stays labeled. Auto live order is DeepSeek → Ollama → Gateway; Bedrock only when explicitly selected.
 - [x] **Eval** — `npm run eval` scores `lib/eval/fixtures.ts` (≥8 cases) with checklist pass plus micro precision/recall. Deterministic engine only.
@@ -58,7 +58,7 @@ account-resource prerequisites). Runtime SDK map: [CDS_RUNTIME.md](./CDS_RUNTIME
 
 ## How to demo (judges)
 
-1. Open the production URL → load **DEMO-001** → **开始核对**. Header badges show
+1. Open the production URL `/workspace` (the site root is the product intro) → load **DEMO-001** → **开始核对**. Header badges show
    `review:` (configured engine, `auto` or `explicit`) and, after a run, `ran:`
    (the engine that actually returned). Do not treat a config flag as a completed call.
    With no model keys this is the deterministic engine.

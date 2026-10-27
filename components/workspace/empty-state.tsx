@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 export function EmptyState({ onLoad }: { onLoad: () => void }) {
@@ -13,10 +14,16 @@ export function EmptyState({ onLoad }: { onLoad: () => void }) {
         <li>数量若双方已写明，不再追问。</li>
         <li>样例里的发送只记录外发，不调用 SES，也不显示已投递。</li>
       </ul>
-      <div className="mt-5">
+      <div className="mt-5 flex flex-wrap items-center gap-4">
         <Button size="lg" onClick={onLoad}>
           加载 DEMO-001
         </Button>
+        <Link
+          href="/"
+          className="text-[13px] font-semibold text-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+        >
+          产品介绍
+        </Link>
       </div>
     </div>
   );

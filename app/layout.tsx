@@ -8,13 +8,17 @@ const sourceSans = Source_Sans_3({
 });
 
 export const metadata: Metadata = {
-  title: "OrderCheck · 订单确认工作台",
-  description: "卖方在发送订单确认前，核对双方往来里尚未对齐的交付、样品和包装范围。",
+  title: {
+    default: "OrderCheck · 发确认之前的订单核对",
+    template: "%s",
+  },
+  description: "OrderCheck 读一张订单的买卖往来，列出未确认事项和证据，起草确认邮件，并如实记录外发。",
+  applicationName: "OrderCheck",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" className="scroll-smooth">
       <body className={`${sourceSans.variable} antialiased`}>{children}</body>
     </html>
   );
