@@ -12,7 +12,7 @@ const noto = Noto_Sans_SC({
 
 export default function HomePage() {
   return (
-    <div className={`${noto.className} bg-white text-base text-ink antialiased selection:bg-accent-soft`}>
+    <div className={`${noto.className} min-h-screen bg-zinc-950 text-base text-zinc-100 antialiased selection:bg-indigo-500/30`}>
       <LandingPage />
     </div>
   );
