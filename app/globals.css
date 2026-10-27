@@ -2,32 +2,46 @@
 
 @theme inline {
   --font-sans: var(--font-source);
-  --font-serif: var(--font-fraunces);
-  --color-desk: #1c2633;
-  --color-paper: #f6f1e6;
-  --color-card: #fffdf8;
-  --color-ink: #1c2430;
-  --color-muted: #5c6775;
-  --color-line: #eadfcd;
-  --color-vermilion: #c4452d;
-  --color-pine: #1f6b4a;
-  --color-brass: #8a5a12;
-  --color-sea: #1e4d6b;
+  --color-canvas: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-ink: #18181b;
+  --color-muted: #3f3f46;
+  --color-subtle: #52525b;
+  --color-line: #e4e4e7;
+  --color-line-strong: #d4d4d8;
+  --color-accent: #3730a3;
+  --color-accent-hover: #312e81;
+  --color-accent-soft: #eef2ff;
+  --color-attention: #92400e;
+  --color-attention-soft: #fffbeb;
+  --color-ok: #065f46;
+  --color-ok-soft: #ecfdf5;
+  --color-danger: #991b1b;
+  --color-danger-soft: #fef2f2;
 }
 
 body {
-  background: var(--color-desk);
+  background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-source), "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 mark {
-  background: #f6d98a;
+  background: #fde68a;
   color: inherit;
   border-radius: 2px;
   padding: 0 0.12em;
 }
 
-.font-serif {
-  font-family: var(--font-fraunces), "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

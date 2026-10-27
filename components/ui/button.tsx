@@ -6,19 +6,19 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c4452d] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 aria-disabled:opacity-40",
   {
     variants: {
       variant: {
-        default: "bg-[#1c2430] text-[#f6f1e6] hover:bg-[#2c3a4d]",
-        vermilion: "bg-[#c4452d] text-white hover:bg-[#a73824]",
-        outline: "border border-[#ddcfb8] bg-[#fffdf8] text-[#1c2430] hover:bg-[#f3ecdf]",
-        ghost: "text-[#1c2430] hover:bg-black/5",
+        default: "bg-accent text-white hover:bg-accent-hover",
+        outline: "border border-line-strong bg-surface text-ink hover:bg-zinc-50",
+        ghost: "text-ink hover:bg-zinc-100",
+        destructive: "bg-danger text-white hover:bg-red-950",
       },
       size: {
-        default: "h-10 px-3.5",
-        sm: "h-8 px-2.5 text-xs",
-        lg: "h-11 px-4",
+        default: "h-9 px-3",
+        sm: "h-8 px-2.5",
+        lg: "h-10 px-3.5 text-sm",
       },
     },
     defaultVariants: {
@@ -28,9 +28,7 @@ const buttonVariants = cva(
   },
 );
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
 }
 
