@@ -2,7 +2,7 @@ import { getRuntimeConfig } from "@/lib/aws/config";
 import { createOrderRepository } from "@/lib/aws/repository";
 import { jsonError, readJson } from "@/lib/http";
 import { ReviewOrchestrationError, runReview } from "@/lib/review/orchestrator";
-import type { Order } from "@/lib/types";
+import type { Order, PersistenceKind } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +37,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         `核对返回了 ${result.engine}，但当前配置要求 ${config.reviewEngine}。没有把结果标成配置中的引擎。`,
       );
     }
-    const persistence: { store: "memory" | "dynamodb"; ok: boolean; error?: string } = {
+    const persistence: { store: PersistenceKind; ok: boolean; error?: string } = {
       store: config.persistence,
       ok: true,
     };

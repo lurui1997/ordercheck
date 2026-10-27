@@ -132,11 +132,13 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setCompare(null);
     setError(null);
     setPane("materials");
-    if (config.persistence !== "dynamodb") {
+    const durable = config.persistence === "postgres" || config.persistence === "sqlite" || config.persistence === "dynamodb";
+    if (!durable) {
       setNotice("已加载 DEMO-001。三封邮件看起来像是谈过了，但还没有核对。");
       return;
     }
-    setNotice("已在浏览器打开 DEMO-001，正在写入 DynamoDB…");
+    const storeLabel = config.persistence === "postgres" ? "Postgres" : config.persistence === "sqlite" ? "SQLite" : "DynamoDB";
+    setNotice(`已在浏览器打开 DEMO-001，正在写入 ${storeLabel}…`);
     try {
       const response = await fetch("/api/orders", {
         method: "POST",
@@ -145,12 +147,12 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       });
       const data = (await response.json()) as { error?: { message?: string } };
       if (!response.ok) {
-        setError(data.error?.message ?? "DynamoDB 写入失败。浏览器里的样例仍可核对，没有改标成已持久化。");
+        setError(data.error?.message ?? `${storeLabel} 写入失败。浏览器里的样例仍可核对，没有改标成已持久化。`);
         return;
       }
-      setNotice("已加载 DEMO-001，并写入 DynamoDB（整单 JSON，含邮件与事项）。");
+      setNotice(`已加载 DEMO-001，并写入 ${storeLabel}（整单 JSON，含邮件与事项）。`);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "DynamoDB 写入失败。浏览器里的样例仍可核对。");
+      setError(loadError instanceof Error ? loadError.message : `${storeLabel} 写入失败。浏览器里的样例仍可核对。`);
     }
   }
 
