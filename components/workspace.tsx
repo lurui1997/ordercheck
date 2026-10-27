@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { BrandMark } from "@/components/brand-mark";
 import { MessagePane } from "@/components/message-pane";
-import { CommandStrip } from "@/components/workspace/command-strip";
 import { CompareDialog } from "@/components/workspace/compare-dialog";
 import { EmailDialog } from "@/components/workspace/email-dialog";
 import { EmptyState, LoadingState } from "@/components/workspace/empty-state";
@@ -11,6 +12,7 @@ import { IssuesWorkbench } from "@/components/workspace/issues-workbench";
 import { ReplyDock } from "@/components/workspace/reply-dock";
 import { StatusBanner } from "@/components/workspace/status-banner";
 import { SummaryDialog } from "@/components/workspace/summary-dialog";
+import { Button } from "@/components/ui/button";
 import { TopBar, type HealthChip } from "@/components/workspace/top-bar";
 import { applyDecision, applyReply, buildChecklist, buildDraft, buildSummary, recordOutbound, reviewOrder } from "@/lib/review/engine";
 import { ambiguousReply, createOrderFromScenario, reopenReply, scriptedReplies } from "@/lib/scenario";
@@ -40,7 +42,7 @@ import { cn } from "@/lib/utils";
 const STORAGE_KEY = "ordercheck.demo.v1";
 
 type Banner = { tone: "error" | "info"; message: string; code?: string } | null;
-type Pane = "messages" | "issues" | "facts";
+type Pane = "messages" | "issues";
 
 interface ReviewResponse {
   order?: Order;
@@ -700,94 +702,179 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     config.smtpConfigured ||
     config.liveEngine !== null;
 
-  return (
-    <div className="flex min-h-dvh flex-col bg-canvas text-ink">
-      <TopBar config={config} order={order} health={health} />
-      <CommandStrip
-        loadLabel={order ? "重新加载 DEMO-001" : "加载 DEMO-001"}
-        reviewLabel={order?.reviewed ? "再次核对" : "开始核对"}
-        commands={commands}
-        hint={hint}
-        reviewBusy={reviewBusy}
-        compareBusy={compareBusy}
-        draftBusy={draftBusy}
-        sendBusy={sendBusy}
-        reviewPrimary={!order?.reviewed}
-        draftPrimary={Boolean(order?.reviewed) && !draft}
-        recordPrimary={Boolean(draft)}
-        onLoad={() => void loadDemo()}
-        onReview={() => void onReview()}
-        onCompare={() => void onCompare()}
-        onDraft={() => openEmail()}
-        onRecord={() => setEmailOpen(true)}
-        onSummary={() => setSummaryOpen(true)}
-      />
-      {showRuntimeNote ? (
-        <p role="status" className="border-b border-amber-200 bg-attention-soft px-4 py-2 text-[13px] leading-5 text-attention">
-          {config.modeLabel} · 核对引擎 {config.reviewEngineError ? "无效" : `${configuredEngine.label} (${configuredEngine.code} · ${config.reviewEngineSelection})`} ·
-          自动链 DeepSeek → Ollama → AI Gateway → 规则引擎 · 对照 {config.liveEngine ? `${liveEngine.label} (${liveEngine.code})` : "无，不会调用模型"} · {mail.detail}
-          {config.missing.length > 0 ? ` 还缺 ${config.missing.join("、")}。` : ""}
-          {config.reviewEngineError ? ` ${config.reviewEngineError}` : ""}
-          {config.persistenceError ? ` ${config.persistenceError}` : ""}
-          {config.reviewEngine === "bedrock" && !config.bedrockConfigured
-            ? " Bedrock 尚未配置齐全，开始核对会返回明确错误，不会回退到规则引擎。"
-            : ""}
-          {config.reviewEngine === "ai_gateway" && !config.gatewayConfigured ? " AI Gateway 尚未配置 AI_GATEWAY_API_KEY。" : ""}
-          {config.reviewEngine === "deepseek" && !config.deepseekConfigured
-            ? " DeepSeek 尚未配置 DEEPSEEK_API_KEY。开始核对会返回明确错误，不会回退到规则引擎，也不会标成 Bedrock 或 AI Gateway。"
-            : ""}
-          {config.reviewEngine === "ollama" && !config.ollamaConfigured
-            ? " Ollama 尚未配置 OLLAMA_MODEL。开始核对会返回明确错误，不会回退到规则引擎。"
-            : ""}
-        </p>
-      ) : null}
-      {banner ? <StatusBanner tone={banner.tone} message={banner.message} code={banner.code} onDismiss={() => setBanner(null)} /> : null}
+  const guide = !order?.reviewed
+    ? {
+        kicker: "下一步 · 订单确认前",
+        title: "确认订单前，把没说清的地方找出来",
+        detail: `已收集 ${order?.messages.length ?? 0} 份材料。核对只提出建议，不会自动修改条件或发送邮件。`,
+        label: reviewBusy ? "正在核对…" : "开始核对",
+        command: commands.review,
+        run: () => void onReview(),
+      }
+    : !draft
+      ? {
+          kicker: "下一步 · 由你决定",
+          title: openCount ? `还有 ${openCount} 项，需要双方说清楚` : "本轮核对已处理",
+          detail: openCount ? "展开差异后，再起草一封确认邮件。助手不会代替双方承诺。" : "可以查看约定摘要，或在邮件下方回放后续回复。",
+          label: draftBusy ? "正在起草…" : openCount ? "起草确认邮件" : "查看约定摘要",
+          command: openCount ? commands.draft : commands.summary,
+          run: () => (openCount ? openEmail() : setSummaryOpen(true)),
+        }
+      : {
+          kicker: "下一步 · 发出前再看一遍",
+          title: "确认邮件已起草",
+          detail: mail.transport === "recorded" ? "没有 SMTP 时只记录外发。投递状态是未发送，不会调用 SES。" : mail.detail,
+          label: sendBusy ? "正在记录…" : "检查草稿并记录",
+          command: commands.record,
+          run: () => setEmailOpen(true),
+        };
 
-      <main id="workspace-main" className="min-h-0 flex-1" aria-busy={reviewBusy || compareBusy || draftBusy || sendBusy}>
-        {!ready ? <LoadingState /> : null}
-        {ready && !order ? <EmptyState onLoad={() => void loadDemo()} /> : null}
-        {ready && order ? (
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="flex gap-1 border-b border-line bg-surface px-3 py-2 lg:hidden" role="tablist" aria-label="工作区">
-              {(
-                [
-                  ["messages", "往来"],
-                  ["issues", "事项"],
-                  ["facts", "事实"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={pane === id}
-                  className={cn(
-                    "rounded-md px-2.5 py-1 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                    pane === id ? "bg-accent text-white" : "text-subtle hover:bg-zinc-100",
-                  )}
-                  onClick={() => setPane(id)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="grid min-h-0 flex-1 lg:grid-cols-2 xl:h-[calc(100dvh-8.5rem)] xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.95fr)_300px]">
-              <section
-                aria-label="往来"
-                className={cn("border-line lg:max-h-[calc(100dvh-8.5rem)] lg:overflow-y-auto lg:border-r", pane !== "messages" && "max-lg:hidden")}
-              >
-                <div className="space-y-3 p-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-[13px] font-semibold text-ink">往来</h2>
-                    <span className="text-[12px] tabular-nums text-subtle">{order.messages.length} 条</span>
+  return (
+    <div className="min-h-dvh bg-canvas text-ink lg:pl-[216px]">
+      <aside className="flex flex-col bg-navy px-[18px] pb-6 pt-7 text-[#d2deed] lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:h-dvh lg:w-[216px] lg:overflow-y-auto">
+        <Link href="/" className="flex items-center gap-2 rounded-md px-2 text-white">
+          <BrandMark />
+          <span className="text-[22px] font-bold tracking-[-1px]">OrderCheck</span>
+        </Link>
+        <p className="px-2 pb-8 pt-2.5 text-[10px] tracking-[2px] text-[#8298b3]">订单核对</p>
+        <p className="px-3.5 pb-3 text-[10px] tracking-[1.3px] text-[#8298b3]">当前订单</p>
+        {order ? (
+          <div className="rounded-r-[5px] border-l-2 border-[#7396ff] bg-[#1c3552] px-3.5 py-3.5 text-[12px] leading-relaxed">
+            <span className="block text-[10px] text-[#86a0bd]">{order.id}</span>
+            <span className="mt-1 block text-white">{order.name}</span>
+            <span className="mt-1 block text-[10px] text-[#86a0bd]">{order.buyer.name}</span>
+            <span className="mt-1 block text-[10px] text-[#f0d7a2]">
+              {order.reviewed ? (openCount ? `${openCount} 项尚待对齐` : "本轮已处理") : "等待首次核对"}
+            </span>
+          </div>
+        ) : (
+          <p className="rounded-r-[5px] border-l-2 border-[#3d5674] bg-[#1c3552] px-3.5 py-3.5 text-[12px] text-[#86a0bd]">未加载订单</p>
+        )}
+        <p className="px-2.5 py-4 text-[11px] leading-relaxed text-[#8298b3]">每张订单保留一条沟通。这里只有样例 DEMO-001。</p>
+        <div className="mt-auto px-1 pt-6">
+          <button
+            type="button"
+            className="w-full rounded-md border border-[#3d5674] px-3 py-2 text-left text-[12px] text-[#d2deed] hover:bg-[#233c59] disabled:opacity-45"
+            disabled={commands.load.disabled}
+            onClick={() => void loadDemo()}
+          >
+            {order ? "重新加载 DEMO-001" : "加载 DEMO-001"}
+          </button>
+          {order ? (
+            <a href="#demo-replay" className="mt-3 block px-1 text-[11px] text-[#adc0d9] hover:text-white">
+              演示与测试
+            </a>
+          ) : null}
+          <p className="mt-4 flex items-center gap-2 text-[11px] leading-relaxed text-[#8298b3]">
+            <span className="inline-flex size-7 items-center justify-center rounded-full bg-[#38536e] text-[10px] text-white">
+              {(order?.seller.name ?? "卖").slice(0, 1)}
+            </span>
+            <span>
+              <strong className="font-medium text-[#becde0]">{order?.seller.name ?? "卖方"}</strong>
+              <span className="mt-0.5 block">样例订单。没有 SMTP 时只记录，不发送。</span>
+            </span>
+          </p>
+        </div>
+      </aside>
+
+      <div className="min-w-0">
+        <TopBar config={config} order={order} health={health} />
+        {showRuntimeNote ? (
+          <p role="status" className="border-b border-[#eee0c7] bg-attention-soft px-5 py-2 text-[12px] leading-5 text-attention sm:px-8">
+            {config.modeLabel} · 核对引擎 {config.reviewEngineError ? "无效" : `${configuredEngine.label} (${configuredEngine.code} · ${config.reviewEngineSelection})`} ·
+            自动链 DeepSeek → Ollama → AI Gateway → 规则引擎 · 对照 {config.liveEngine ? `${liveEngine.label} (${liveEngine.code})` : "无，不会调用模型"} · {mail.detail}
+            {config.missing.length > 0 ? ` 还缺 ${config.missing.join("、")}。` : ""}
+            {config.reviewEngineError ? ` ${config.reviewEngineError}` : ""}
+            {config.persistenceError ? ` ${config.persistenceError}` : ""}
+            {config.reviewEngine === "bedrock" && !config.bedrockConfigured
+              ? " Bedrock 尚未配置齐全，开始核对会返回明确错误，不会回退到规则引擎。"
+              : ""}
+            {config.reviewEngine === "ai_gateway" && !config.gatewayConfigured ? " AI Gateway 尚未配置 AI_GATEWAY_API_KEY。" : ""}
+            {config.reviewEngine === "deepseek" && !config.deepseekConfigured
+              ? " DeepSeek 尚未配置 DEEPSEEK_API_KEY。开始核对会返回明确错误，不会回退到规则引擎，也不会标成 Bedrock 或 AI Gateway。"
+              : ""}
+            {config.reviewEngine === "ollama" && !config.ollamaConfigured
+              ? " Ollama 尚未配置 OLLAMA_MODEL。开始核对会返回明确错误，不会回退到规则引擎。"
+              : ""}
+          </p>
+        ) : null}
+        {banner ? <StatusBanner tone={banner.tone} message={banner.message} code={banner.code} onDismiss={() => setBanner(null)} /> : null}
+
+        <main id="workspace-main" className="mx-auto max-w-[1600px] px-4 py-6 sm:px-8 sm:py-8" aria-busy={reviewBusy || compareBusy || draftBusy || sendBusy}>
+          {!ready ? <LoadingState /> : null}
+          {ready && !order ? <EmptyState onLoad={() => void loadDemo()} /> : null}
+          {ready && order ? (
+            <div>
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 text-[11px] tracking-[0.04em] text-[#607da5]">
+                    <span className="size-1.5 rounded-full bg-[#516b8f]" aria-hidden />
+                    {order.id}
+                    <span>/</span>
+                    订单确认前
+                  </p>
+                  <h1 className="mt-2 text-[26px] font-semibold leading-snug tracking-[-0.04em] text-[#222d3d]">{order.name}</h1>
+                  <p className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-[#5b79a3]">
+                    <span className="grid size-[22px] place-items-center rounded-full bg-[#e4e8ef] text-[10px] text-[#56647a]">{order.buyer.name.slice(0, 1)}</span>
+                    <strong className="font-medium text-[#3f536f]">{order.buyer.name}</strong>
+                    <span>{order.buyer.email}</span>
+                    <span>·</span>
+                    <span>{order.seller.name}</span>
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded bg-[#f3ebd9] px-2 py-1 text-[11px] text-[#947242]">{order.reviewed && openCount === 0 ? "本轮已处理" : "确认前核对"}</span>
+                  <Button size="sm" variant="outline" aria-disabled={commands.summary.disabled || undefined} onClick={() => (commands.summary.disabled ? setBanner({ tone: "info", message: commands.summary.reason ?? "先完成核对。" }) : setSummaryOpen(true))}>
+                    约定摘要
+                  </Button>
+                  <Button size="sm" variant="ghost" aria-disabled={commands.compare.disabled || undefined} onClick={() => (commands.compare.disabled ? setBanner({ tone: "info", message: commands.compare.reason ?? "现在不能对照。" }) : void onCompare())}>
+                    {compareBusy ? "正在对照…" : "双引擎对比"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="mb-4 flex gap-2 lg:hidden" role="tablist" aria-label="工作区">
+                {(
+                  [
+                    ["messages", "邮件"],
+                    ["issues", "助手"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={pane === id}
+                    className={cn(
+                      "rounded-md px-3 py-1.5 text-[12px] font-medium",
+                      pane === id ? "bg-accent text-white" : "bg-white text-muted",
+                    )}
+                    onClick={() => setPane(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.92fr)]">
+                <section aria-label="订单邮件" className={cn("overflow-hidden rounded-xl border border-line bg-white shadow-[0_2px_7px_#29374a08]", pane !== "messages" && "max-lg:hidden")}>
+                  <header className="border-b border-line px-5 py-4">
+                    <h2 className="text-[14px] font-semibold text-[#2e3d52]">订单邮件</h2>
+                    <p className="mt-1 text-[11px] text-[#748db1]">
+                      {order.seller.name} ↔ {order.buyer.name}
+                      <span className="mx-1">·</span>
+                      {order.messages.length} 份材料 · 按时间排列
+                    </p>
+                  </header>
+                  <div className="px-5">
+                    <MessagePane
+                      messages={order.messages}
+                      buyerName={order.buyer.name}
+                      sellerName={order.seller.name}
+                      activeMessageId={anchor?.messageId}
+                      highlights={highlights}
+                    />
                   </div>
-                  <MessagePane
-                    messages={order.messages}
-                    buyerName={order.buyer.name}
-                    sellerName={order.seller.name}
-                    activeMessageId={anchor?.messageId}
-                    highlights={highlights}
-                  />
                   <ReplyDock
                     reviewed={order.reviewed}
                     played={played}
@@ -803,47 +890,66 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
                     onReopen={() => play(reopenReply())}
                     onCustom={playCustom}
                   />
-                </div>
-              </section>
-              <section
-                aria-label="事项"
-                className={cn("border-line lg:max-h-[calc(100dvh-8.5rem)] lg:overflow-y-auto xl:border-r", pane !== "issues" && "max-lg:hidden")}
-              >
-                <IssuesWorkbench
-                  order={order}
-                  issues={filteredIssues}
-                  total={order.issues.length}
-                  openCount={openCount}
-                  highOpen={highOpen}
-                  selectedIssueId={selectedIssueId}
-                  statusFilter={statusFilter}
-                  priorityFilter={priorityFilter}
-                  hiddenSelection={hiddenSelection}
-                  onStatusFilter={setStatusFilter}
-                  onPriorityFilter={setPriorityFilter}
-                  onClearFilters={() => {
-                    setStatusFilter("all");
-                    setPriorityFilter("all");
-                  }}
-                  onSelect={(issueId) => focusIssue(order, issueId)}
-                  onLocate={locate}
-                  onAsk={onAsk}
-                  onDecide={onDecide}
-                />
-              </section>
-              <section
-                aria-label="事实"
-                className={cn(
-                  "border-line bg-zinc-50 lg:col-span-2 lg:max-h-72 lg:overflow-y-auto lg:border-t xl:col-span-1 xl:max-h-[calc(100dvh-8.5rem)] xl:border-l xl:border-t-0",
-                  pane !== "facts" && "max-lg:hidden",
-                )}
-              >
-                <FactsPanel order={order} checklist={checklist} onLocate={locate} />
-              </section>
+                  <p className="flex gap-2 px-5 py-3 text-[11px] leading-relaxed text-[#7b93b5]">已录入的往来在这里。样例发送不会连接真实邮箱。</p>
+                </section>
+
+                <aside aria-label="核对助手" className={cn(pane !== "issues" && "max-lg:hidden")}>
+                  <div className="mb-4 flex items-start gap-2">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-[9px] bg-[#dce4ef] text-[12px] font-semibold text-[#4b6384]">核</span>
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[14px] font-semibold tracking-tight text-[#33445c]">确认前，帮你多看一步</h2>
+                      <p className="mt-1 text-[11px] leading-relaxed text-[#718baf]">从往来里找差异，把下一封邮件准备好。</p>
+                    </div>
+                    <span className="text-[11px] text-[#6c87ad]">{order.reviewed ? `${openCount} 项待处理` : "待核对"}</span>
+                  </div>
+                  <section className="mb-4 rounded-[11px] border border-[#d1def3] bg-[#eaf1fb] px-5 py-5">
+                    <p className="text-[10px] tracking-[0.04em] text-[#6480a8]">{guide.kicker}</p>
+                    <h3 className="mt-2 text-[19px] font-medium leading-snug tracking-[-0.03em] text-[#294c76]">{guide.title}</h3>
+                    <p className="mt-2 text-[12px] leading-relaxed text-[#5e7ba4]">{guide.detail}</p>
+                    <Button className="mt-4 w-full" aria-disabled={guide.command.disabled || undefined} onClick={() => (guide.command.disabled ? setBanner({ tone: "info", message: guide.command.reason ?? hint }) : guide.run())}>
+                      {guide.label}
+                    </Button>
+                    <p className="mt-2 text-center text-[11px] leading-5 text-[#5e7ba4]">{hint}</p>
+                  </section>
+                  <section className="overflow-hidden rounded-xl border border-line bg-white shadow-[0_2px_7px_#29374a08]">
+                    <IssuesWorkbench
+                      order={order}
+                      issues={filteredIssues}
+                      total={order.issues.length}
+                      openCount={openCount}
+                      highOpen={highOpen}
+                      selectedIssueId={selectedIssueId}
+                      statusFilter={statusFilter}
+                      priorityFilter={priorityFilter}
+                      hiddenSelection={hiddenSelection}
+                      onStatusFilter={setStatusFilter}
+                      onPriorityFilter={setPriorityFilter}
+                      onClearFilters={() => {
+                        setStatusFilter("all");
+                        setPriorityFilter("all");
+                      }}
+                      onSelect={(issueId) => focusIssue(order, issueId)}
+                      onLocate={locate}
+                      onAsk={onAsk}
+                      onDecide={onDecide}
+                    />
+                    <div className="border-t border-line bg-[#f9fbfd] px-4 py-3">
+                      <p className="mb-2 text-center text-[11px] text-[#7c94b5]">起草后仍要你确认，不会自动发出。</p>
+                      <Button className="w-full" size="sm" aria-disabled={commands.draft.disabled || undefined} onClick={() => (commands.draft.disabled ? setBanner({ tone: "info", message: commands.draft.reason ?? "先完成核对。" }) : openEmail())}>
+                        {draftBusy ? "正在起草…" : "起草确认邮件"}
+                      </Button>
+                    </div>
+                  </section>
+                  <details className="mt-4 rounded-xl border border-line bg-white px-4 py-3">
+                    <summary className="cursor-pointer text-[12px] text-[#50647d]">订单事实与外发记录</summary>
+                    <FactsPanel order={order} checklist={checklist} onLocate={locate} />
+                  </details>
+                </aside>
+              </div>
             </div>
-          </div>
-        ) : null}
-      </main>
+          ) : null}
+        </main>
+      </div>
 
       <EmailDialog
         open={emailOpen}

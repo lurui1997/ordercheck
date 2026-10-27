@@ -12,7 +12,7 @@ export function LandingPage() {
       <a
         href="#content"
         className={cn(
-          "sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:bg-zinc-950 focus:px-3 focus:py-2 focus:text-sm focus:text-white",
+          "sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:bg-navy focus:px-3 focus:py-2 focus:text-sm focus:text-white",
           focusRing,
         )}
       >

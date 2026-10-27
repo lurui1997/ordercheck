@@ -38,9 +38,9 @@ export function ReplyDock({
   onCustom: () => void;
 }) {
   return (
-    <section className="rounded-md border border-line bg-zinc-50 p-3">
+    <section id="demo-replay" className="border-t border-dashed border-line bg-[#f9fbfd] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[13px] font-semibold text-ink">样例回放</h2>
+        <h2 className="text-[13px] font-semibold text-[#50647d]">演示与测试</h2>
         <span className="text-[12px] tabular-nums text-subtle">
           {played}/{total} · 不是 SES 收件
         </span>

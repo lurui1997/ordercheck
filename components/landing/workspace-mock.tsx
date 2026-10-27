@@ -1,98 +1,70 @@
-import { Badge } from "@/components/ui/badge";
+import { BrandMark } from "@/components/brand-mark";
 import { mockCaption } from "@/components/landing/content";
-
-const messages = [
-  {
-    who: "Emma · 买方",
-    quote: ["delivered to our London warehouse", "by 20 November 2026"],
-    rest: "based on sample v2, including the protective inserts",
-  },
-  {
-    who: "Lin · 卖方",
-    quote: ["ready for collection in Shanghai", "on 20 November 2026"],
-    rest: "The boxes are USD 2.40 each.",
-  },
-];
-
-const issues = [
-  { label: "重要 · 还没对齐", title: "到货和提货不是一回事", detail: "都写了 11 月 20 日", selected: true },
-  { label: "重要 · 还没对齐", title: "样品 v2 和 v1 对不上", detail: "买方要 v2，报价写 v1", selected: false },
-  { label: "重要 · 还没对齐", title: "内托没有报价", detail: "买方要内托，报价只写了盒子", selected: false },
-];
 
 export function WorkspaceMock() {
   return (
     <figure className="min-w-0">
       <div
         aria-hidden
-        className="overflow-hidden rounded-2xl border border-white/15 bg-white text-ink shadow-[0_50px_120px_-36px_rgba(99,102,241,0.7)] ring-1 ring-inset ring-white/60"
+        className="overflow-hidden rounded-xl border border-line bg-canvas text-ink shadow-[0_24px_60px_-28px_rgba(20,44,73,0.45)]"
       >
-        <div className="flex items-center gap-3 border-b border-line bg-zinc-50 px-4 py-3">
-          <span className="flex gap-1.5" aria-hidden>
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-300" />
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-300" />
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-300" />
-          </span>
-          <p className="min-w-0 flex-1 truncate text-[13px] font-semibold">
-            <span className="font-mono">DEMO-001</span>
-            <span className="mx-1.5 text-subtle">/</span>
-            1,000 套礼品包装
-          </p>
-          <Badge>DEMO</Badge>
-          <Badge tone="attention">未发送</Badge>
-        </div>
+        <div className="grid min-h-[420px] md:grid-cols-[168px_minmax(0,1.15fr)_minmax(0,0.9fr)]">
+          <aside className="hidden flex-col bg-navy px-4 py-6 text-[#d2deed] md:flex">
+            <div className="flex items-center gap-2 text-white">
+              <BrandMark size="sm" />
+              <span className="text-[15px] font-bold tracking-[-0.04em]">OrderCheck</span>
+            </div>
+            <p className="mt-2 px-0.5 text-[10px] tracking-[0.14em] text-[#8298b3]">当前订单</p>
+            <div className="mt-3 rounded-r-md border-l-2 border-[#7396ff] bg-[#1c3552] px-3 py-3">
+              <p className="text-[10px] text-[#86a0bd]">DEMO-001</p>
+              <p className="mt-1 text-[12px] leading-5 text-white">1,000 套礼品包装</p>
+              <p className="mt-1 text-[10px] text-[#f0d7a2]">等待首次核对</p>
+            </div>
+            <p className="mt-auto pt-8 text-[10px] leading-5 text-[#8298b3]">样例订单，不是邮箱同步。</p>
+          </aside>
 
-        <div className="grid lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.95fr)_minmax(190px,0.7fr)]">
-          <div className="border-b border-line p-4 lg:border-b-0 lg:border-r">
-            <h3 className="px-1 text-[12px] font-semibold text-subtle">往来</h3>
-            <ul className="mt-2 space-y-2">
-              {messages.map((message) => (
-                <li key={message.who} className="rounded-lg border border-line px-3 py-2.5">
-                  <p className="text-[12px] font-semibold text-subtle">{message.who}</p>
-                  <p className="mt-1 text-[13px] leading-5">
-                    <mark>
-                      {message.quote[0]}
-                      <br />
-                      {message.quote[1]}
-                    </mark>
-                  </p>
-                  <p className="mt-1 text-[12px] leading-5 text-subtle">{message.rest}</p>
-                </li>
-              ))}
-            </ul>
+          <div className="border-b border-line bg-white md:border-b-0 md:border-r">
+            <div className="border-b border-line px-4 py-3">
+              <p className="text-[13px] font-semibold text-[#2e3d52]">订单邮件</p>
+              <p className="mt-1 text-[11px] text-[#748db1]">Lin ↔ Emma · 2 封已展开示意</p>
+            </div>
+            <div className="px-4">
+              <div className="border-b border-[#edf0f5] py-3">
+                <p className="text-[12px] font-semibold text-[#3b4e68]">Emma · 买方</p>
+                <p className="mt-1 truncate text-[12px] text-[#56729a]">delivered to our London warehouse…</p>
+              </div>
+              <div className="py-3">
+                <p className="text-[12px] font-semibold text-[#3b4e68]">Lin · 卖方</p>
+                <p className="mt-2 text-[12px] leading-6 text-[#415673]">
+                  <mark>ready for collection in Shanghai</mark>
+                  <br />
+                  <mark>on 20 November 2026</mark>
+                </p>
+                <p className="mt-1 text-[12px] leading-5 text-muted">The boxes are USD 2.40 each.</p>
+              </div>
+            </div>
           </div>
 
-          <div className="border-b border-line bg-zinc-50/80 p-4 lg:border-b-0 lg:border-r">
-            <h3 className="px-1 text-[12px] font-semibold text-subtle">事项</h3>
-            <ul className="mt-2 space-y-2">
-              {issues.map((issue) => (
-                <li
-                  key={issue.title}
-                  className={
-                    issue.selected
-                      ? "rounded-lg border border-indigo-200 bg-accent-soft px-3 py-2"
-                      : "rounded-lg border border-line bg-white px-3 py-2"
-                  }
-                >
-                  <Badge tone="attention">{issue.label}</Badge>
-                  <p className="mt-1.5 text-[13px] font-semibold leading-5">{issue.title}</p>
-                  <p className="text-[12px] leading-5 text-subtle">{issue.detail}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="p-4">
-            <h3 className="px-1 text-[12px] font-semibold text-subtle">事实</h3>
-            <ul className="mt-2 space-y-2 text-[13px] leading-5">
-              <li className="rounded-lg border border-emerald-200 bg-ok-soft px-3 py-2 text-ok">数量 1,000，两边都写了</li>
-              <li className="rounded-lg border border-line bg-white px-3 py-2">盒子 USD 2.40，不是整套价</li>
-              <li className="rounded-lg border border-amber-200 bg-attention-soft px-3 py-2 text-attention">运费还没写</li>
+          <div className="bg-white p-4">
+            <p className="text-[13px] font-semibold text-[#33445c]">确认前，帮你多看一步</p>
+            <div className="mt-3 rounded-[11px] border border-[#d1def3] bg-[#eaf1fb] p-3">
+              <p className="text-[10px] tracking-wide text-[#6480a8]">下一步 · 订单确认前</p>
+              <p className="mt-1.5 text-[14px] font-medium leading-6 tracking-tight text-[#294c76]">把没说清的地方找出来</p>
+              <span className="mt-3 inline-flex h-8 items-center rounded-[6px] bg-accent px-3 text-[11px] font-medium text-white">开始核对</span>
+            </div>
+            <ul className="mt-3 space-y-2">
+              <li className="rounded-lg border border-[#a2b3cb] bg-[#f9fbfd] px-3 py-2">
+                <p className="text-[12px] font-medium leading-5 text-[#33445c]">到货和提货不是一回事</p>
+                <p className="mt-1 truncate text-[11px] text-[#6984aa]">delivered to our London warehouse</p>
+              </li>
+              <li className="rounded-lg border border-[#d7dfe9] px-3 py-2">
+                <p className="text-[12px] font-medium leading-5 text-[#33445c]">样品 v2 和 v1 对不上</p>
+              </li>
             </ul>
           </div>
         </div>
       </div>
-      <figcaption className="mt-4 text-center text-[12px] text-zinc-400">{mockCaption}</figcaption>
+      <figcaption className="mt-4 text-center text-[12px] text-muted">{mockCaption}</figcaption>
     </figure>
   );
 }
