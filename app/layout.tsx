@@ -12,7 +12,7 @@ export const metadata: Metadata = {
     default: "OrderCheck · 发确认之前的订单核对",
     template: "%s",
   },
-  description: "OrderCheck 读一张订单的买卖往来，列出未确认事项和证据，起草确认邮件，并如实记录外发。",
+  description: "发确认前，先看这一张订单邮件里没说清的地方。",
   applicationName: "OrderCheck",
 };
 
