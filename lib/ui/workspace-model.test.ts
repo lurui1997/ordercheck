@@ -27,11 +27,8 @@ function reviewed(): Order {
 }
 
 const demoConfig = {
-  mode: "demo",
-  sesConfigured: false,
-  sesLive: false,
-  dynamoConfigured: false,
-} as Pick<RuntimeConfig, "mode" | "sesConfigured" | "sesLive" | "dynamoConfigured">;
+  persistence: "memory",
+} as Pick<RuntimeConfig, "persistence">;
 
 describe("workspace view model", () => {
   it("filters issues by priority and open state", () => {
@@ -91,9 +88,17 @@ describe("workspace view model", () => {
 
     expect(enginePresentation("deterministic").detail).not.toMatch(/这次核对走 Amazon Bedrock/);
     expect(enginePresentation("deterministic").label).toBe("规则引擎");
+    expect(enginePresentation("deterministic").detail).toMatch(/没有调用 Amazon Bedrock、AI Gateway 或 DeepSeek/);
     expect(enginePresentation("ai_gateway").detail).toMatch(/不是 Amazon Bedrock/);
     expect(enginePresentation("bedrock").code).toBe("bedrock");
-    expect(persistencePresentation(demoConfig).label).toBe("浏览器");
+    const deepseek = enginePresentation("deepseek");
+    expect(deepseek.label).toBe("DeepSeek");
+    expect(deepseek.label).not.toBe("规则引擎");
+    expect(deepseek.code).toBe("deepseek");
+    expect(deepseek.detail).toMatch(/不是 Amazon Bedrock/);
+    expect(deepseek.detail).toMatch(/也不是规则引擎/);
+    expect(persistencePresentation(demoConfig).label).toBe("内存");
+    expect(persistencePresentation({ persistence: "dynamodb" }).label).toBe("DynamoDB");
     expect(sesPresentation({ sesLive: false }).label).toBe("SES 未发信");
     expect(statusTone("confirmed")).toBe("ok");
     expect(statusTone("unconfirmed")).toBe("danger");

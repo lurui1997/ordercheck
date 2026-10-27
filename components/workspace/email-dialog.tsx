@@ -18,6 +18,7 @@ export function EmailDialog({
   draftBusy,
   sendBusy,
   pendingSend,
+  pendingNote,
   record,
   ses,
   onOpenChange,
@@ -33,6 +34,7 @@ export function EmailDialog({
   draftBusy: boolean;
   sendBusy: boolean;
   pendingSend: "record" | "ses" | null;
+  pendingNote?: string;
   record: CommandAvailability;
   ses: CommandAvailability;
   onOpenChange: (open: boolean) => void;
@@ -136,6 +138,11 @@ export function EmailDialog({
             </span>
           </div>
         </div>
+      ) : draftBusy ? (
+        <p className="flex items-center gap-2 text-sm text-subtle" role="status">
+          <Spinner />
+          {pendingNote ?? "正在生成草稿…"}
+        </p>
       ) : (
         <p className="text-sm text-subtle">还没有草稿。</p>
       )}

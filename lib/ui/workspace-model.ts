@@ -7,6 +7,7 @@ import type {
   Order,
   Priority,
   ReviewEngine,
+  ReviewEngineSelection,
   RuntimeConfig,
 } from "@/lib/types";
 
@@ -208,25 +209,51 @@ export function enginePresentation(engine: ReviewEngine): EnginePresentation {
         label: "AI Gateway",
         detail: "核对走 Vercel AI Gateway。不是 Amazon Bedrock，也不是规则引擎。",
       };
-    default:
+    case "deepseek":
+      return {
+        code: "deepseek",
+        label: "DeepSeek",
+        detail: "核对走 DeepSeek。不是 Amazon Bedrock，也不是 AI Gateway，也不是规则引擎。",
+      };
+    case "deterministic":
       return {
         code: "deterministic",
         label: "规则引擎",
-        detail: "确定性规则引擎。这次核对没有调用 Amazon Bedrock 或 AI Gateway。",
+        detail: "确定性规则引擎。这次核对没有调用 Amazon Bedrock、AI Gateway 或 DeepSeek。",
       };
   }
 }
 
-export function persistencePresentation(config: Pick<RuntimeConfig, "dynamoConfigured">): { label: string; detail: string } {
-  if (config.dynamoConfigured) {
+export function selectionLabel(selection: ReviewEngineSelection): "auto" | "explicit" {
+  return selection === "explicit" ? "explicit" : "auto";
+}
+
+export function liveEnginePresentation(engine: ReviewEngine | null): { label: string; code: string; detail: string } {
+  if (!engine) {
+    return {
+      label: "无",
+      code: "none",
+      detail: "对照不会调用模型。没有可用的 AI Gateway、DeepSeek 或已具备凭证的 Bedrock。",
+    };
+  }
+  const presented = enginePresentation(engine);
+  return {
+    label: presented.label,
+    code: presented.code,
+    detail: `对照会调用 ${presented.label}。${presented.detail}`,
+  };
+}
+
+export function persistencePresentation(config: Pick<RuntimeConfig, "persistence">): { label: string; detail: string } {
+  if (config.persistence === "dynamodb") {
     return {
       label: "DynamoDB",
       detail: "订单接口写入 DynamoDB。当前工作台副本仍保存在本机浏览器。",
     };
   }
   return {
-    label: "浏览器",
-    detail: "工作台保存在本机浏览器。订单接口使用进程内存，新实例为空。",
+    label: "内存",
+    detail: "工作台副本保存在本机浏览器。订单接口使用进程内存，新实例为空。只有表名时不会标成 DynamoDB。",
   };
 }
 

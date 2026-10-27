@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MessagePane } from "@/components/message-pane";
 import { CommandStrip } from "@/components/workspace/command-strip";
-import { CompareDialog, type CompareView } from "@/components/workspace/compare-dialog";
+import { CompareDialog } from "@/components/workspace/compare-dialog";
 import { EmailDialog } from "@/components/workspace/email-dialog";
 import { EmptyState, LoadingState } from "@/components/workspace/empty-state";
 import { FactsPanel } from "@/components/workspace/facts-panel";
@@ -14,7 +14,7 @@ import { SummaryDialog } from "@/components/workspace/summary-dialog";
 import { TopBar, type HealthChip } from "@/components/workspace/top-bar";
 import { applyDecision, applyReply, buildChecklist, buildDraft, buildSummary, recordOutbound, reviewOrder } from "@/lib/review/engine";
 import { ambiguousReply, createOrderFromScenario, reopenReply, scriptedReplies } from "@/lib/scenario";
-import type { DecisionKind, EmailDraft, Order, ReviewEngine, Role, RuntimeConfig } from "@/lib/types";
+import type { DecisionKind, EmailDraft, Order, ReviewCompareResult, ReviewEngine, Role, RuntimeConfig } from "@/lib/types";
 import {
   CLOSED_STATUSES,
   anchorForIssue,
@@ -23,6 +23,7 @@ import {
   defaultDraftIssueIds,
   enginePresentation,
   filterIssues,
+  liveEnginePresentation,
   highlightQuotes,
   nextStepHint,
   pickInitialIssue,
@@ -44,10 +45,24 @@ interface ReviewResponse {
   order?: Order;
   engine?: string;
   notice?: string;
-  bedrockRequestId?: string;
-  gatewayUsage?: { totalTokens?: number };
-  meta?: { bedrockRequestId?: string; gatewayUsage?: { totalTokens?: number } };
+  meta?: {
+    bedrockRequestId?: string;
+    gatewayUsage?: { totalTokens?: number };
+    deepseekUsage?: { totalTokens?: number };
+  };
+  persistence?: { store?: "memory" | "dynamodb"; ok?: boolean; error?: string };
   error?: { code?: string; message?: string };
+}
+
+interface ReviewSuccess {
+  ok: true;
+  order: Order;
+  engine: ReviewEngine;
+  notice?: string;
+  requestId?: string;
+  tokens?: number;
+  deepseekTokens?: number;
+  persistence?: { store: "memory" | "dynamodb"; ok: boolean; error?: string };
 }
 
 function isOrder(value: unknown): value is Order {
@@ -64,23 +79,30 @@ function isOrder(value: unknown): value is Order {
 }
 
 function isReviewEngine(value: unknown): value is ReviewEngine {
-  return value === "deterministic" || value === "bedrock" || value === "ai_gateway";
+  return value === "deterministic" || value === "bedrock" || value === "ai_gateway" || value === "deepseek";
 }
 
-function reviewNotice(engine: ReviewEngine, requestId?: string, tokens?: number, notice?: string): string {
-  const engineNote =
-    engine === "bedrock"
-      ? `核对引擎：Amazon Bedrock（真实模型调用，不是规则引擎）${requestId ? ` · request id ${requestId}` : ""}。`
-      : engine === "ai_gateway"
-        ? `核对引擎：Vercel AI Gateway（真实模型调用；不是 Bedrock，也不是规则引擎）${tokens != null ? ` · tokens ${tokens}` : ""}。`
-        : "核对引擎：确定性规则引擎（deterministic）。不是 Bedrock，也不是 AI Gateway。";
+function reviewNotice(engine: ReviewEngine, requestId?: string, tokens?: number, deepseekTokens?: number, notice?: string): string {
+  const presented = enginePresentation(engine);
+  const extra =
+    engine === "bedrock" && requestId
+      ? ` · request id ${requestId}`
+      : engine === "ai_gateway" && tokens != null
+        ? ` · tokens ${tokens}`
+        : engine === "deepseek" && deepseekTokens != null
+          ? ` · tokens ${deepseekTokens}`
+          : "";
+  const engineNote = `核对引擎：${presented.label}（${presented.code}）。${presented.detail}${extra}`;
   return notice ? `${notice} ${engineNote}` : engineNote;
 }
 
-async function postReview(order: Order): Promise<
-  | { ok: true; order: Order; engine: ReviewEngine; notice?: string; requestId?: string; tokens?: number }
-  | { ok: false; code?: string; message: string }
-> {
+function isCompareResult(value: unknown): value is ReviewCompareResult {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Partial<ReviewCompareResult>;
+  return Boolean(result.deterministic && result.live && result.agreement);
+}
+
+async function postReview(order: Order): Promise<ReviewSuccess | { ok: false; code?: string; message: string }> {
   const response = await fetch(`/api/orders/${order.id}/review`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -93,14 +115,24 @@ async function postReview(order: Order): Promise<
     data = {};
   }
   if (!response.ok || !data.order) return { ok: false, ...readApiError(data, "核对失败。") };
+  if (!isReviewEngine(data.engine)) {
+    return {
+      ok: false,
+      code: "engine_mismatch",
+      message: `核对返回了 ${String(data.engine)}，没有改标成规则引擎。`,
+    };
+  }
+  const store = data.persistence?.store === "dynamodb" || data.persistence?.store === "memory" ? data.persistence.store : undefined;
   return {
     ok: true,
     order: data.order,
-    engine: isReviewEngine(data.engine) ? data.engine : "deterministic",
+    engine: data.engine,
     notice: data.notice,
-    requestId: data.bedrockRequestId ?? data.meta?.bedrockRequestId,
-    tokens: data.gatewayUsage?.totalTokens ?? data.meta?.gatewayUsage?.totalTokens,
-  };
+    requestId: data.meta?.bedrockRequestId,
+    tokens: data.meta?.gatewayUsage?.totalTokens,
+    deepseekTokens: data.meta?.deepseekUsage?.totalTokens,
+    persistence: store && typeof data.persistence?.ok === "boolean" ? { store, ok: data.persistence.ok, error: data.persistence.error } : undefined,
+  } satisfies ReviewSuccess;
 }
 
 export function Workspace({ config }: { config: RuntimeConfig }) {
@@ -115,7 +147,8 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
   const [emailOpen, setEmailOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
-  const [compareView, setCompareView] = useState<CompareView | null>(null);
+  const [compareResult, setCompareResult] = useState<ReviewCompareResult | null>(null);
+  const [compareError, setCompareError] = useState<{ code?: string; message: string } | null>(null);
   const [draft, setDraft] = useState<EmailDraft | null>(null);
   const [draftEngine, setDraftEngine] = useState<ReviewEngine | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
@@ -156,14 +189,29 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     let cancelled = false;
     fetch("/api/health")
       .then(async (response) => {
-        const data = (await response.json()) as { ok?: boolean; missing?: string[] };
+        const data = (await response.json()) as {
+          ok?: boolean;
+          missing?: string[];
+          reviewEngine?: unknown;
+          reviewEngineSelection?: unknown;
+          liveEngine?: unknown;
+          persistence?: unknown;
+          deepseek?: unknown;
+        };
         if (cancelled) return;
         const missing = Array.isArray(data.missing) ? data.missing.filter((item) => typeof item === "string") : [];
+        const reported = {
+          reviewEngine: typeof data.reviewEngine === "string" ? data.reviewEngine : undefined,
+          reviewEngineSelection: typeof data.reviewEngineSelection === "string" ? data.reviewEngineSelection : undefined,
+          liveEngine: data.liveEngine === null ? null : typeof data.liveEngine === "string" ? data.liveEngine : undefined,
+          persistence: data.persistence === "memory" || data.persistence === "dynamodb" ? data.persistence : undefined,
+          deepseek: typeof data.deepseek === "boolean" ? data.deepseek : undefined,
+        };
         if (!response.ok || data.ok !== true) {
-          setHealth({ state: "unavailable", missing });
+          setHealth({ state: "unavailable", missing, ...reported });
           return;
         }
-        setHealth({ state: missing.length > 0 ? "degraded" : "ok", missing });
+        setHealth({ state: missing.length > 0 ? "degraded" : "ok", missing, ...reported });
       })
       .catch(() => {
         if (!cancelled) setHealth({ state: "unavailable", missing: [] });
@@ -218,6 +266,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
   });
   const mailActions = sendAvailability(config);
   const configuredEngine = enginePresentation(config.reviewEngine);
+  const liveEngine = liveEnginePresentation(config.liveEngine);
 
   function focusIssue(next: Order, issueId?: string | null) {
     const issue = next.issues.find((item) => item.issue_id === issueId) ?? pickInitialIssue(next);
@@ -232,7 +281,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setBanner(message ? { tone: "info", message, code } : null);
   }
 
-  function loadDemo() {
+  async function loadDemo() {
     const next = createOrderFromScenario();
     setOrder(next);
     setAnchor(null);
@@ -242,12 +291,47 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setEmailOpen(false);
     setSummaryOpen(false);
     setCompareOpen(false);
-    setCompareView(null);
+    setCompareResult(null);
+    setCompareError(null);
     setReplyBody("");
     setStatusFilter("all");
     setPriorityFilter("all");
-    setBanner({ tone: "info", message: "已加载 DEMO-001。三封邮件已入账，尚未核对。" });
     setPane("messages");
+    if (config.persistence !== "dynamodb") {
+      setBanner({ tone: "info", message: "已加载 DEMO-001。三封邮件已入账，尚未核对。订单接口使用进程内存。" });
+      return;
+    }
+    setBanner({ tone: "info", message: "已在浏览器加载 DEMO-001，正在写入 DynamoDB。" });
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fixture: "DEMO-001" }),
+      });
+      let data: { error?: { code?: string; message?: string } } = {};
+      try {
+        data = (await response.json()) as { error?: { code?: string; message?: string } };
+      } catch {
+        data = {};
+      }
+      if (!response.ok) {
+        const error = readApiError(data, "写入 DynamoDB 失败。");
+        setBanner({
+          tone: "error",
+          message: `${error.message} 浏览器里的 DEMO-001 仍可使用，没有把这份样例标成已写入 DynamoDB。`,
+          code: error.code ?? "persist_failed",
+        });
+        return;
+      }
+      setBanner({ tone: "info", message: "已加载 DEMO-001，并写入 DynamoDB。工作台副本仍在本机浏览器。三封邮件已入账，尚未核对。" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "写入 DynamoDB 失败。";
+      setBanner({
+        tone: "error",
+        message: `${message} 浏览器里的 DEMO-001 仍可使用，没有把这份样例标成已写入 DynamoDB。`,
+        code: "persist_failed",
+      });
+    }
   }
 
   async function onReview() {
@@ -273,7 +357,16 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
         return;
       }
       setOrder(result.order);
-      setBanner({ tone: "info", message: reviewNotice(result.engine, result.requestId, result.tokens, result.notice) });
+      const notice = reviewNotice(result.engine, result.requestId, result.tokens, result.deepseekTokens, result.notice);
+      if (result.persistence && result.persistence.ok === false) {
+        setBanner({
+          tone: "error",
+          message: `${notice} 核对引擎已返回结果，但写入 ${result.persistence.store} 失败${result.persistence.error ? `：${result.persistence.error}` : ""}。工作台显示的是这次核对结果，没有把存储标成成功。`,
+          code: "persistence_failed",
+        });
+      } else {
+        setBanner({ tone: "info", message: notice });
+      }
       focusIssue(result.order);
       setPane("issues");
     } catch (error) {
@@ -287,46 +380,30 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     if (!order || compareBusy || reviewBusy) return;
     setCompareOpen(true);
     setCompareBusy(true);
-    setCompareView(null);
-    const local = reviewOrder(order);
-    const left = local.ok ? local.order : null;
-    const leftError = local.ok ? undefined : local.error;
-    if (config.reviewEngine === "deterministic") {
-      setCompareView({ left, leftError, right: null, rightEngine: null, singleEngine: true });
-      setCompareBusy(false);
-      return;
-    }
+    setCompareResult(null);
+    setCompareError(null);
     try {
-      const result = await postReview(order);
-      if (!result.ok) {
-        setCompareView({
-          left,
-          leftError,
-          right: null,
-          rightEngine: config.reviewEngine,
-          rightError: { code: result.code, message: result.message },
-          singleEngine: false,
-        });
-        setBanner({ tone: "error", message: result.message, code: result.code });
+      const response = await fetch(`/api/orders/${order.id}/review-compare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order }),
+      });
+      let data: unknown = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      if (!response.ok || !isCompareResult(data)) {
+        const error = readApiError(data as { error?: { code?: string; message?: string } } | null, "对照失败。");
+        setCompareError(error);
+        setBanner({ tone: "error", message: error.message, code: error.code });
         return;
       }
-      setCompareView({
-        left,
-        leftError,
-        right: result.order,
-        rightEngine: result.engine,
-        singleEngine: false,
-      });
+      setCompareResult(data);
     } catch (error) {
       const message = error instanceof Error ? error.message : "对照请求失败。";
-      setCompareView({
-        left,
-        leftError,
-        right: null,
-        rightEngine: config.reviewEngine,
-        rightError: { code: "review_failed", message },
-        singleEngine: false,
-      });
+      setCompareError({ code: "review_failed", message });
       setBanner({ tone: "error", message, code: "review_failed" });
     } finally {
       setCompareBusy(false);
@@ -370,19 +447,47 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
         error?: { code?: string; message?: string };
       };
       if (requestId !== draftRequest.current) return;
-      if (!response.ok || !data.draft) {
-        const error = readApiError(data, "生成草稿失败，已使用确定性模板。");
+      if (!response.ok || !data.draft || !isReviewEngine(data.draftEngine)) {
+        const error = readApiError(data, "生成草稿失败。");
+        if (config.reviewEngine === "deepseek") {
+          setDraft(null);
+          setDraftEngine(null);
+          setEmailOpen(false);
+          setBanner({ tone: "error", message: `${error.message} 没有使用确定性模板。`, code: error.code ?? "draft_failed" });
+          return;
+        }
         setDraft(buildDraft(order, issueIds));
         setDraftEngine("deterministic");
-        setBanner({ tone: "error", message: error.message, code: error.code });
+        setBanner({ tone: "error", message: `${error.message} 已改用确定性模板，并标成规则引擎。`, code: error.code });
         return;
       }
-      const engine = isReviewEngine(data.draftEngine) ? data.draftEngine : "deterministic";
+      if (config.reviewEngine === "deepseek" && data.draftEngine !== "deepseek") {
+        setDraft(null);
+        setDraftEngine(null);
+        setEmailOpen(false);
+        setBanner({
+          tone: "error",
+          message: `草稿引擎是 ${data.draftEngine}，与配置的 DeepSeek 不一致。没有使用确定性模板。`,
+          code: "engine_mismatch",
+        });
+        return;
+      }
       setDraft(data.draft);
-      setDraftEngine(engine);
-      if (data.notice && engine !== "deterministic") setBanner({ tone: "info", message: data.notice });
+      setDraftEngine(data.draftEngine);
+      if (data.notice && data.draftEngine !== "deterministic") setBanner({ tone: "info", message: data.notice });
     } catch (error) {
       if (requestId !== draftRequest.current) return;
+      if (config.reviewEngine === "deepseek") {
+        setDraft(null);
+        setDraftEngine(null);
+        setEmailOpen(false);
+        setBanner({
+          tone: "error",
+          message: `${error instanceof Error ? error.message : "生成草稿失败。"} 没有使用确定性模板。`,
+          code: "draft_failed",
+        });
+        return;
+      }
       setDraft(buildDraft(order, issueIds));
       setDraftEngine("deterministic");
       setBanner({
@@ -402,8 +507,13 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       setBanner({ tone: "error", message: "没有还能写入确认邮件的事项。", code: "draft_empty" });
       return;
     }
-    setDraft(buildDraft(order, ids));
-    setDraftEngine("deterministic");
+    if (config.reviewEngine === "deepseek") {
+      setDraft(null);
+      setDraftEngine(null);
+    } else {
+      setDraft(buildDraft(order, ids));
+      setDraftEngine("deterministic");
+    }
     setEmailOpen(true);
     void requestDraft(ids);
   }
@@ -420,8 +530,13 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     if (!order || !draft) return;
     const nextIds = draft.issue_ids.includes(issueId) ? draft.issue_ids.filter((id) => id !== issueId) : [...draft.issue_ids, issueId];
     if (nextIds.length === 0) return;
-    setDraft(buildDraft(order, nextIds));
-    setDraftEngine("deterministic");
+    if (config.reviewEngine === "deepseek") {
+      setDraft(null);
+      setDraftEngine(null);
+    } else {
+      setDraft(buildDraft(order, nextIds));
+      setDraftEngine("deterministic");
+    }
     void requestDraft(nextIds);
   }
 
@@ -526,7 +641,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
     setPane("issues");
   }
 
-  const showRuntimeNote = config.mode === "aws" || config.reviewEngine !== "deterministic" || config.sesLive;
+  const showRuntimeNote = config.mode === "aws" || config.reviewEngine !== "deterministic" || config.sesLive || config.liveEngine !== null;
 
   return (
     <div className="flex min-h-dvh flex-col bg-canvas text-ink">
@@ -543,7 +658,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
         reviewPrimary={!order?.reviewed}
         draftPrimary={Boolean(order?.reviewed) && !draft}
         recordPrimary={Boolean(draft)}
-        onLoad={loadDemo}
+        onLoad={() => void loadDemo()}
         onReview={() => void onReview()}
         onCompare={() => void onCompare()}
         onDraft={() => openEmail()}
@@ -552,19 +667,23 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       />
       {showRuntimeNote ? (
         <p role="status" className="border-b border-amber-200 bg-attention-soft px-4 py-2 text-[13px] leading-5 text-attention">
-          {config.modeLabel} · 核对引擎 {configuredEngine.label} ({configuredEngine.code}) · {sesPresentation(config).detail}
+          {config.modeLabel} · 核对引擎 {configuredEngine.label} ({configuredEngine.code} · {config.reviewEngineSelection}) · 对照{" "}
+          {config.liveEngine ? `${liveEngine.label} (${liveEngine.code})` : "无，不会调用模型"} · {sesPresentation(config).detail}
           {config.missing.length > 0 ? ` 还缺 ${config.missing.join("、")}。` : ""}
           {config.reviewEngine === "bedrock" && !config.bedrockConfigured
             ? " Bedrock 尚未配置齐全，开始核对会返回明确错误，不会回退到规则引擎。"
             : ""}
           {config.reviewEngine === "ai_gateway" && !config.gatewayConfigured ? " AI Gateway 尚未配置 AI_GATEWAY_API_KEY。" : ""}
+          {config.reviewEngine === "deepseek" && !config.deepseekConfigured
+            ? " DeepSeek 尚未配置 DEEPSEEK_API_KEY。开始核对会返回明确错误，不会回退到规则引擎，也不会标成 Bedrock 或 AI Gateway。"
+            : ""}
         </p>
       ) : null}
       {banner ? <StatusBanner tone={banner.tone} message={banner.message} code={banner.code} onDismiss={() => setBanner(null)} /> : null}
 
       <main id="workspace-main" className="min-h-0 flex-1" aria-busy={reviewBusy || compareBusy || draftBusy || sendBusy}>
         {!ready ? <LoadingState /> : null}
-        {ready && !order ? <EmptyState onLoad={loadDemo} /> : null}
+        {ready && !order ? <EmptyState onLoad={() => void loadDemo()} /> : null}
         {ready && order ? (
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex gap-1 border-b border-line bg-surface px-3 py-2 lg:hidden" role="tablist" aria-label="工作区">
@@ -665,13 +784,14 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
       </main>
 
       <EmailDialog
-        open={emailOpen && Boolean(draft)}
+        open={emailOpen}
         draft={draft}
         issues={order?.issues ?? []}
         draftEngine={draftEngine}
         draftBusy={draftBusy}
         sendBusy={sendBusy}
         pendingSend={pendingSend}
+        pendingNote={config.reviewEngine === "deepseek" ? "正在向 DeepSeek 请求草稿…" : undefined}
         record={mailActions.record}
         ses={mailActions.ses}
         onOpenChange={setEmailOpen}
@@ -681,7 +801,7 @@ export function Workspace({ config }: { config: RuntimeConfig }) {
         onSes={() => void sendDraft("ses")}
       />
       <SummaryDialog open={summaryOpen} summary={summary} onOpenChange={setSummaryOpen} />
-      <CompareDialog open={compareOpen} busy={compareBusy} view={compareView} onOpenChange={setCompareOpen} />
+      <CompareDialog open={compareOpen} busy={compareBusy} result={compareResult} error={compareError} onOpenChange={setCompareOpen} />
     </div>
   );
 }

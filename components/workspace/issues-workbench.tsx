@@ -84,6 +84,7 @@ export function IssuesWorkbench({
           <span className="ml-1 font-mono">{engine.code}</span>
           {meta?.bedrockRequestId ? ` · request id ${meta.bedrockRequestId}` : ""}
           {meta?.gatewayUsage?.totalTokens != null ? ` · gateway tokens ${meta.gatewayUsage.totalTokens}` : ""}
+          {meta?.deepseekUsage?.totalTokens != null ? ` · deepseek tokens ${meta.deepseekUsage.totalTokens}` : ""}
           {meta?.agentRetries ? ` · agent retry ${meta.agentRetries}` : ""}
         </p>
       ) : null}

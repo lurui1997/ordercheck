@@ -1,26 +1,45 @@
 import { Badge } from "@/components/ui/badge";
 import { STAGE_LABEL } from "@/lib/labels";
-import { enginePresentation, persistencePresentation, sesPresentation } from "@/lib/ui/workspace-model";
+import { enginePresentation, liveEnginePresentation, persistencePresentation, selectionLabel, sesPresentation } from "@/lib/ui/workspace-model";
 import type { Order, RuntimeConfig } from "@/lib/types";
 
 export interface HealthChip {
   state: "loading" | "ok" | "degraded" | "unavailable";
   missing: string[];
+  reviewEngine?: string;
+  reviewEngineSelection?: string;
+  liveEngine?: string | null;
+  persistence?: string;
+  deepseek?: boolean;
 }
 
-export function TopBar({ config, order, health }: { config: RuntimeConfig; order: Order | null; health: HealthChip }) {
-  const engine = enginePresentation(config.reviewEngine);
-  const persistence = persistencePresentation(config);
-  const ses = sesPresentation(config);
-  const healthLabel = health.state === "loading" ? "检查中" : health.state === "ok" ? "正常" : health.state === "degraded" ? "缺配置" : "不可用";
-  const healthTitle =
+function healthTitleFor(health: HealthChip): string {
+  const base =
     health.state === "degraded" && health.missing.length > 0
-      ? `健康检查缺少 ${health.missing.join("、")}`
+      ? `健康检查缺少 ${health.missing.join("、")}。`
       : health.state === "unavailable"
         ? "健康检查没有返回。"
         : health.state === "loading"
           ? "正在读取健康检查。"
           : "健康检查正常，没有缺失配置。";
+  const reported: string[] = [];
+  if (health.reviewEngine) {
+    reported.push(`核对 ${health.reviewEngine}${health.reviewEngineSelection ? ` ${health.reviewEngineSelection}` : ""}`);
+  }
+  if (health.liveEngine !== undefined) reported.push(`对照 ${health.liveEngine ?? "无"}`);
+  if (health.persistence) reported.push(`存储 ${health.persistence}`);
+  if (health.deepseek !== undefined) reported.push(`deepseek ${health.deepseek ? "已配置" : "未配置"}`);
+  return reported.length > 0 ? `${base} ${reported.join(" · ")}。` : base;
+}
+
+export function TopBar({ config, order, health }: { config: RuntimeConfig; order: Order | null; health: HealthChip }) {
+  const engine = enginePresentation(config.reviewEngine);
+  const selection = selectionLabel(config.reviewEngineSelection);
+  const live = liveEnginePresentation(config.liveEngine);
+  const persistence = persistencePresentation(config);
+  const ses = sesPresentation(config);
+  const healthLabel = health.state === "loading" ? "检查中" : health.state === "ok" ? "正常" : health.state === "degraded" ? "缺配置" : "不可用";
+  const healthTitle = healthTitleFor(health);
 
   return (
     <header className="border-b border-line bg-surface">
@@ -59,14 +78,23 @@ export function TopBar({ config, order, health }: { config: RuntimeConfig; order
           </li>
           <li>
             <Badge tone={engine.code === "deterministic" ? "neutral" : "accent"} className="max-w-full">
-              <span title={engine.detail}>
+              <span title={`${engine.detail} 选择方式 ${selection}。`}>
                 核对 · {engine.label}
                 <span className="ml-1 font-mono font-normal text-[10px]">{engine.code}</span>
+                <span className="ml-1 font-mono font-normal text-[10px]">{selection}</span>
               </span>
             </Badge>
           </li>
           <li>
-            <Badge tone="neutral">
+            <Badge tone={config.liveEngine ? "accent" : "neutral"} className="max-w-full">
+              <span title={live.detail}>
+                对照 · {live.label}
+                {config.liveEngine ? <span className="ml-1 font-mono font-normal text-[10px]">{live.code}</span> : null}
+              </span>
+            </Badge>
+          </li>
+          <li>
+            <Badge tone={config.persistence === "dynamodb" ? "attention" : "neutral"}>
               <span title={persistence.detail}>存储 · {persistence.label}</span>
             </Badge>
           </li>
