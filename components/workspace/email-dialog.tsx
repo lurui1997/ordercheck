@@ -80,7 +80,7 @@ export function EmailDialog({
                 <label key={issue.issue_id} className="flex items-start gap-2 text-[13px] leading-5">
                   <input
                     type="checkbox"
-                    className="mt-1 accent-indigo-800"
+                    className="mt-1 accent-[#275ee9]"
                     checked={draft.issue_ids.includes(issue.issue_id)}
                     onChange={() => onToggleIssue(issue.issue_id)}
                   />

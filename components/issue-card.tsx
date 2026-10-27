@@ -71,7 +71,7 @@ export function IssueCard({
 
   return (
     <article
-      className={cn("rounded-md border bg-surface p-3", selected ? "border-accent ring-1 ring-accent" : "border-line")}
+      className={cn("rounded-lg border bg-white p-3", selected ? "border-[#a2b3cb] bg-[#f9fbfd]" : "border-[#d7dfe9]")}
       aria-current={selected ? "true" : undefined}
     >
       <h3 className="text-sm font-semibold leading-5">

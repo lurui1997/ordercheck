@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { STAGE_LABEL } from "@/lib/labels";
-import { enginePresentation, liveEnginePresentation, mailPresentation, objectStorePresentation, persistencePresentation, selectionLabel } from "@/lib/ui/workspace-model";
+import { mailPresentation } from "@/lib/ui/workspace-model";
 import type { Order, RuntimeConfig } from "@/lib/types";
 
 export interface HealthChip {
@@ -46,98 +44,46 @@ function healthTitleFor(health: HealthChip): string {
 }
 
 export function TopBar({ config, order, health }: { config: RuntimeConfig; order: Order | null; health: HealthChip }) {
-  const engine = enginePresentation(config.reviewEngine);
-  const selection = selectionLabel(config.reviewEngineSelection);
-  const live = liveEnginePresentation(config.liveEngine);
-  const persistence = persistencePresentation(config);
   const mail = mailPresentation(config);
-  const objectStore = objectStorePresentation(config.objectStore);
+  const liveMail = mail.transport !== "recorded";
   const healthLabel = health.state === "loading" ? "检查中" : health.state === "ok" ? "正常" : health.state === "degraded" ? "缺配置" : "不可用";
   const healthTitle = healthTitleFor(health);
+  const modeText = config.mode === "aws" ? `${config.modeLabel} · ${mail.label}` : `样例 · ${mail.label}`;
 
   return (
-    <header className="border-b border-line bg-surface">
+    <header className="flex min-h-[72px] items-center justify-between gap-3 border-b border-line bg-white px-5 sm:px-8">
       <a
         href="#workspace-main"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:z-50 focus:rounded-md focus:bg-surface focus:px-2 focus:py-1 focus:text-sm focus:ring-2 focus:ring-accent"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:z-50 focus:rounded-md focus:bg-white focus:px-2 focus:py-1 focus:text-sm"
       >
         跳到工作区
       </a>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
-        <Link
-          href="/"
-          aria-label="OrderCheck 产品介绍"
-          className="min-w-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-        >
-          <p className="text-sm font-semibold leading-5 text-ink">OrderCheck</p>
-          <p className="text-[12px] leading-4 text-subtle">订单确认工作台</p>
+      <p className="min-w-0 truncate text-[12px] text-[#8290a2]">
+        <Link href="/" className="rounded-sm font-medium text-[#4a5d75] hover:text-accent">
+          OrderCheck
         </Link>
-        <div className="min-w-0 flex-1">
-          {order ? (
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold text-ink">
-                <span className="font-mono tabular-nums">{order.id}</span>
-                <span className="mx-1.5 text-subtle">/</span>
-                {order.name}
-              </p>
-              <p className="truncate text-[12px] text-subtle">
-                {order.seller.name} → {order.buyer.name}
-                <span className="mx-1.5">·</span>
-                {STAGE_LABEL[order.stage] ?? order.stage}
-              </p>
-            </div>
-          ) : (
-            <p className="text-[13px] text-subtle">未加载订单</p>
-          )}
-        </div>
-        <ul className="flex flex-wrap items-center gap-1.5" aria-label="运行状态">
-          <li>
-            <Badge tone={config.mode === "aws" ? "attention" : "neutral"}>{config.modeLabel}</Badge>
-          </li>
-          <li>
-            <Badge tone={config.reviewEngineError ? "danger" : engine.code === "deterministic" ? "neutral" : "accent"} className="max-w-full">
-              <span title={config.reviewEngineError ?? `${engine.detail} 选择方式 ${selection}。自动链是 DeepSeek，其次 Ollama，再次 AI Gateway，否则规则引擎。`}>
-                核对 · {config.reviewEngineError ? "无效" : engine.label}
-                <span className="ml-1 font-mono font-normal text-[10px]">{config.reviewEngineError ? "invalid" : engine.code}</span>
-                <span className="ml-1 font-mono font-normal text-[10px]">{selection}</span>
-              </span>
-            </Badge>
-          </li>
-          <li>
-            <Badge tone={config.liveEngine ? "accent" : "neutral"} className="max-w-full">
-              <span title={live.detail}>
-                对照 · {live.label}
-                {config.liveEngine ? <span className="ml-1 font-mono font-normal text-[10px]">{live.code}</span> : null}
-              </span>
-            </Badge>
-          </li>
-          <li>
-            <Badge tone={config.persistenceError ? "danger" : config.persistence === "memory" ? "neutral" : "attention"}>
-              <span title={persistence.detail}>存储 · {persistence.label}</span>
-            </Badge>
-          </li>
-          <li>
-            <Badge tone={config.objectStore === "none" ? "neutral" : "accent"}>
-              <span title={objectStore.detail}>对象 · {objectStore.label}</span>
-            </Badge>
-          </li>
-          <li>
-            <Badge tone={mail.transport === "recorded" ? "neutral" : "attention"}>
-              <span title={mail.detail}>{mail.label}</span>
-            </Badge>
-          </li>
-          <li>
-            <span className="inline-flex items-center gap-1.5 rounded border border-line bg-zinc-50 px-1.5 py-0.5 text-[11px] font-semibold text-subtle" title={healthTitle}>
-              <span
-                aria-hidden="true"
-                className={`size-1.5 rounded-full ${
-                  health.state === "ok" ? "bg-emerald-700" : health.state === "degraded" ? "bg-amber-700" : health.state === "unavailable" ? "bg-red-700" : "bg-zinc-400"
-                }`}
-              />
-              健康 · {healthLabel}
-            </span>
-          </li>
-        </ul>
+        <span className="mx-2 text-[#c2cad6]">/</span>
+        <span>{order ? order.id : "工作台"}</span>
+      </p>
+      <div className="flex shrink-0 items-center gap-3">
+        <span
+          className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${
+            liveMail ? "border-[#d0eadc] bg-[#e9f7f0] text-ok" : "border-[#dde7fc] bg-[#eef3fd] text-[#49658f]"
+          }`}
+          title={mail.detail}
+        >
+          <i className={`mr-1.5 inline-block size-1.5 rounded-full ${liveMail ? "bg-ok" : "bg-[#6485c0]"}`} aria-hidden />
+          {modeText}
+        </span>
+        <span className="hidden items-center gap-1.5 text-[11px] text-muted sm:inline-flex" title={healthTitle}>
+          <i
+            aria-hidden
+            className={`size-1.5 rounded-full ${
+              health.state === "ok" ? "bg-ok" : health.state === "degraded" ? "bg-attention" : health.state === "unavailable" ? "bg-danger" : "bg-[#6485c0]"
+            }`}
+          />
+          健康 · {healthLabel}
+        </span>
       </div>
     </header>
   );

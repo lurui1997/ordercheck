@@ -3,11 +3,11 @@ import { cn } from "@/lib/utils";
 import type { BadgeTone } from "@/lib/ui/workspace-model";
 
 const TONE: Record<BadgeTone, string> = {
-  neutral: "border-line bg-zinc-50 text-subtle",
-  accent: "border-indigo-200 bg-accent-soft text-accent",
-  attention: "border-amber-200 bg-attention-soft text-attention",
-  ok: "border-emerald-200 bg-ok-soft text-ok",
-  danger: "border-red-200 bg-danger-soft text-danger",
+  neutral: "bg-[#f3f5f9] text-[#8996a8]",
+  accent: "bg-accent-soft text-[#738eb7]",
+  attention: "bg-[#fff3e6] text-[#b78138]",
+  ok: "bg-[#eaf7f0] text-[#33876a]",
+  danger: "bg-[#f9eded] text-[#af6e6e]",
 };
 
 export function Badge({
@@ -20,7 +20,7 @@ export function Badge({
   children: ReactNode;
 }) {
   return (
-    <span className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-semibold leading-4", TONE[tone], className)}>
+    <span className={cn("inline-flex items-center rounded-[3px] px-1.5 py-0.5 text-[11px] font-medium leading-4", TONE[tone], className)}>
       {children}
     </span>
   );

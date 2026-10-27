@@ -6,19 +6,19 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] font-semibold transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 aria-disabled:opacity-40",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[6px] text-[12px] font-medium transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-focus focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45 aria-disabled:opacity-45",
   {
     variants: {
       variant: {
-        default: "bg-accent text-white hover:bg-accent-hover",
-        outline: "border border-line-strong bg-surface text-ink hover:bg-zinc-50",
-        ghost: "text-ink hover:bg-zinc-100",
-        destructive: "bg-danger text-white hover:bg-red-950",
+        default: "border border-accent bg-accent text-white shadow-[0_3px_7px_#275ee91a] hover:bg-accent-hover",
+        outline: "border border-[#dce3ed] bg-white text-[#415571] hover:border-[#bfcfee] hover:bg-[#f1f5fd]",
+        ghost: "border border-transparent bg-transparent text-accent hover:bg-accent-soft",
+        destructive: "border border-danger bg-danger text-white hover:bg-red-900",
       },
       size: {
-        default: "h-9 px-3",
-        sm: "h-8 px-2.5",
-        lg: "h-10 px-3.5 text-sm",
+        default: "h-9 px-3.5",
+        sm: "h-8 px-2.5 text-[11px]",
+        lg: "h-10 px-4 text-[13px]",
       },
     },
     defaultVariants: {

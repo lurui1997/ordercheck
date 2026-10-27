@@ -73,7 +73,7 @@ export function IssuesWorkbench({
   return (
     <section aria-label="事项工作台" className="p-3" onKeyDown={onKeyDown}>
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-[13px] font-semibold text-ink">事项</h2>
+        <h2 className="text-[13px] font-semibold text-[#3f536f]">{order.reviewed ? "需要对齐的细节" : "本次核对范围"}</h2>
         <p className="text-[12px] tabular-nums text-subtle">
           {order.reviewed ? `未关闭 ${openCount} · 重要 ${highOpen}` : "尚未核对"}
         </p>
