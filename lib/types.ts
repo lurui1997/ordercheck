@@ -123,14 +123,20 @@ export interface ReviewMeta {
     outputTokens?: number;
     totalTokens?: number;
   };
-  /** OpenAI-compatible request id (DeepSeek / Ollama). Never a Bedrock request id. */
-  modelRequestId?: string;
-  /** Token usage for DeepSeek / Ollama. Not gateway usage. */
-  usage?: {
+  /** Token counts from DeepSeek. Never copy these into gatewayUsage or a Bedrock request id. */
+  deepseekUsage?: {
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
   };
+  /** Token counts from Ollama. Never copy these into deepseekUsage or a Bedrock request id. */
+  ollamaUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+  /** Ollama request id when the server returns one. Not a Bedrock request id. */
+  modelRequestId?: string;
   agentRetries?: number;
   reviewedAt?: string;
 }
@@ -224,7 +230,9 @@ export type EngineResult =
 
 export type ReviewEngine = "deterministic" | "bedrock" | "ai_gateway" | "deepseek" | "ollama";
 
-export type PersistenceKind = "postgres" | "sqlite" | "dynamo" | "memory";
+export type ReviewEngineSelection = "explicit" | "auto";
+
+export type PersistenceKind = "postgres" | "sqlite" | "dynamodb" | "memory";
 
 export type ObjectStoreKind = "minio" | "s3" | "disk" | "none";
 
@@ -234,21 +242,76 @@ export interface RuntimeConfig {
   missing: string[];
   bedrockConfigured: boolean;
   gatewayConfigured: boolean;
+  /** True only when DEEPSEEK_API_KEY is set. Not proof a call succeeded. */
   deepseekConfigured: boolean;
+  /** True only when OLLAMA_MODEL is set. Not proof the daemon answered. */
   ollamaConfigured: boolean;
   sesConfigured: boolean;
   /** True only when AWS_MODE and SES_FROM_ADDRESS + AWS_REGION are set — real SendEmail path. */
   sesLive: boolean;
   /** True when SMTP_HOST and SMTP_FROM are set. Does not probe the server. */
   smtpConfigured: boolean;
+  /**
+   * True only when the process will use DynamoDB: table name, region, and
+   * visible AWS credentials. A table name alone stays false and uses memory.
+   */
   dynamoConfigured: boolean;
-  s3Configured: boolean;
-  inboundConfigured: boolean;
-  reviewEngine: ReviewEngine;
-  /** Set when REVIEW_ENGINE is not a known value. Callers must fail closed. */
-  reviewEngineError?: string;
+  /** Which order store `createOrderRepository()` will actually construct. */
   persistence: PersistenceKind;
   /** Set when an explicit persistence mode is missing its connection settings. */
   persistenceError?: string;
+  s3Configured: boolean;
   objectStore: ObjectStoreKind;
+  inboundConfigured: boolean;
+  reviewEngine: ReviewEngine;
+  /** `explicit` when REVIEW_ENGINE names an engine; `auto` when unset or `auto`. */
+  reviewEngineSelection: ReviewEngineSelection;
+  /** Set when REVIEW_ENGINE is not a known value. Callers must fail closed. */
+  reviewEngineError?: string;
+  /**
+   * Live engine for compare: DeepSeek, else Ollama, else AI Gateway.
+   * Bedrock only when explicitly selected and credentialed.
+   * Independent of an explicit deterministic review override.
+   */
+  liveEngine: ReviewEngine | null;
+}
+
+export interface CompareIssueView {
+  issue_id: string;
+  title: string;
+  status: IssueStatus;
+  kind: IssueKind;
+  priority: Priority;
+}
+
+export interface CompareSide {
+  /** False when no gateway key and no Bedrock region/model — the call was not attempted. */
+  available: boolean;
+  /** True only after a live call returned or threw. False when unavailable. */
+  ran: boolean;
+  engine: ReviewEngine | null;
+  ok: boolean;
+  issues: CompareIssueView[];
+  notice?: string;
+  error?: string;
+  code?: string;
+  /** Env names still required. Never values. */
+  missing?: string[];
+}
+
+export interface ReviewAgreement {
+  /** False when the live side did not succeed — do not treat empty issues as disagreement. */
+  comparable: boolean;
+  shared: string[];
+  onlyDeterministic: string[];
+  onlyLive: string[];
+  statusMismatches: Array<{ issue_id: string; deterministic: IssueStatus; live: IssueStatus }>;
+  /** Issue-id Jaccard, or null when not comparable. */
+  jaccard: number | null;
+}
+
+export interface ReviewCompareResult {
+  deterministic: CompareSide;
+  live: CompareSide;
+  agreement: ReviewAgreement;
 }

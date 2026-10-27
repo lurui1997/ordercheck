@@ -1,4 +1,5 @@
 import { createOrderRepository } from "@/lib/aws/repository";
+import { DeepSeekError } from "@/lib/deepseek";
 import { jsonError, readJson } from "@/lib/http";
 import { draftWithModel } from "@/lib/review/draft-model";
 import type { Order } from "@/lib/types";
@@ -31,10 +32,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     : [];
   if (issueIds.length === 0) return jsonError(400, "no_issues", "请选择至少一项要询问的事项。");
 
-  const result = await draftWithModel(order, issueIds);
-  return Response.json({
-    draft: result.draft,
-    draftEngine: result.draftEngine,
-    notice: result.notice,
-  });
+  try {
+    const result = await draftWithModel(order, issueIds);
+    return Response.json({
+      draft: result.draft,
+      draftEngine: result.draftEngine,
+      notice: result.notice,
+    });
+  } catch (error) {
+    if (error instanceof DeepSeekError) {
+      const status = error.code.endsWith("_not_configured") ? 501 : 502;
+      return jsonError(status, error.code, error.message);
+    }
+    const message = error instanceof Error ? error.message : "生成草稿失败。";
+    return jsonError(500, "draft_failed", message);
+  }
 }

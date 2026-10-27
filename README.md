@@ -63,22 +63,32 @@ docker compose -f docker-compose.oss.yml up -d
 | 变量 | 说明 |
 |---|---|
 | `APP_MODE` / `AWS_MODE` | `demo`（默认）或 `aws` |
-| `REVIEW_ENGINE` | `auto`（默认：deepseek → ollama → gateway → deterministic）/ `deepseek` / `ollama` / `gateway` / `deterministic` / `bedrock`。Bedrock 不会被 auto 选中 |
-| `DEEPSEEK_API_KEY` | DeepSeek。可选 `DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com/v1`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`） |
+| `REVIEW_ENGINE` | `auto`（默认：deepseek → ollama → gateway → deterministic）/ `deepseek` / `ollama` / `gateway` / `deterministic` / `bedrock`。Bedrock 不会被 auto 选中。显式值始终覆盖 auto |
+| `DEEPSEEK_API_KEY` | DeepSeek。有值时 `health.deepseek` 为 true（只表示已配置）。可选 `DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com/v1`）、`DEEPSEEK_MODEL`（默认 `deepseek-chat`） |
 | `OLLAMA_BASE_URL` | 默认 `http://127.0.0.1:11434/v1` |
 | `OLLAMA_MODEL` | 有值才算 Ollama 已配置 |
-| `AI_GATEWAY_API_KEY` | 可选备份。标签是 `ai_gateway` |
+| `AI_GATEWAY_API_KEY` | 可选备份，排在 DeepSeek 和 Ollama 之后。标签是 `ai_gateway`。可选 `AI_GATEWAY_MODEL`（默认 `amazon/nova-lite`） |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | SMTP。Mailpit 常用端口 `1025`，可以不设用户名密码 |
 | `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` / `S3_FORCE_PATH_STYLE` | MinIO 或其他 S3 兼容存储。MinIO 保持 `S3_FORCE_PATH_STYLE=true` |
 | `MAIL_STORE` / `MAIL_DIR` | 不配 MinIO 时把原始 MIME 写到本地磁盘 |
 | `DATABASE_URL` | Postgres。优先于 SQLite 和 DynamoDB |
 | `PERSISTENCE` / `SQLITE_PATH` | `sqlite` 时用 `.data/orders.sqlite` |
 | `INBOUND_WEBHOOK_SECRET` | 保护 `/api/aws/inbound`、`/api/inbound/email`、`/api/aws/ses-events` |
-| `AWS_REGION` / `BEDROCK_MODEL_ID` / `SES_FROM_ADDRESS` / `ORDERS_TABLE_NAME` / `RAW_EMAIL_BUCKET` | 仅可选遗留 AWS 路径 |
+| `AWS_REGION` / `BEDROCK_MODEL_ID` / `SES_FROM_ADDRESS` / `ORDERS_TABLE_NAME` / `RAW_EMAIL_BUCKET` | 仅可选遗留 AWS 路径。`BEDROCK_MAX_TOKENS` 默认 `2400`；`BEDROCK_AGENT_RETRY` 默认 `1` |
+| `ORDERS_TABLE_NAME` + `AWS_REGION` + AWS 凭证 | 三者齐全且没有 Postgres/SQLite 时 `dynamo: true`。只写表名仍是内存 |
 
 不要把访问密钥写进仓库。
 
 ### 如何开启各引擎
+
+**自动选择（`REVIEW_ENGINE` 留空或 `auto`）**
+
+1. 有 `DEEPSEEK_API_KEY` → `deepseek`
+2. 否则有 `OLLAMA_MODEL` → `ollama`（默认 `http://127.0.0.1:11434/v1`）
+3. 否则有 `AI_GATEWAY_API_KEY` → `ai_gateway`
+4. 否则 → `deterministic`
+
+Bedrock 不在这条链上。显式 `REVIEW_ENGINE=deepseek|ollama|gateway|deterministic|bedrock` 始终覆盖上面的顺序。失败返回对应引擎的错误，**不会**把规则引擎结果标成 DeepSeek、Ollama、Bedrock 或 Gateway。DeepSeek 草稿失败同样直接报错，不替换成确定性模板；Ollama / Gateway / Bedrock 草稿失败会退回确定性模板并把 `draftEngine` 标成 `deterministic`。页面徽章区分 `review:`（配置将使用的引擎）和 `ran:`（这次实际跑过的引擎）。
 
 **DeepSeek（推荐的远程模型）**
 
@@ -88,7 +98,7 @@ DEEPSEEK_API_KEY=...
 DEEPSEEK_MODEL=deepseek-chat
 ```
 
-`reviewEngine` 为 `deepseek`。失败返回 `deepseek_*`，不会标成 bedrock，也不会改用规则引擎冒充。
+`GET /api/health` 的 `deepseek: true` 只表示密钥已配置。`reviewEngine` / `ran:` 为 `deepseek` 时才表示这次走的是 DeepSeek，不会写成 `bedrock`、`ollama` 或 `ai_gateway`。核对与草稿走 `lib/deepseek.ts`（写入前会规范化枚举）。
 
 **Ollama（本机开源模型）**
 
@@ -102,13 +112,27 @@ OLLAMA_MODEL=qwen2.5
 
 不设任何模型密钥，或 `REVIEW_ENGINE=deterministic`。DEMO-001 走这条路径。
 
-**Bedrock（仅比赛可选路径）**
+**Bedrock（仅比赛可选路径，必须显式）**
 
 ```bash
 REVIEW_ENGINE=bedrock
 AWS_REGION=us-east-1
 BEDROCK_MODEL_ID=amazon.nova-lite-v1:0
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
 ```
+
+留空 `REVIEW_ENGINE` 不会因为区域、模型或凭证齐全就改走 Bedrock。
+
+**AI Gateway（标成 `ai_gateway`，不是 Bedrock）**
+
+```bash
+REVIEW_ENGINE=gateway
+AI_GATEWAY_API_KEY=...
+AI_GATEWAY_MODEL=amazon/nova-lite
+```
+
+auto 时只有 DeepSeek 和 Ollama 都没配，才会选 Gateway。
 
 **SMTP 真发信**
 
@@ -118,9 +142,62 @@ SMTP_PORT=1025
 SMTP_FROM=seller@localhost
 ```
 
-成功只记 `submit_succeeded` + MessageId。没配 SMTP 时 DEMO 保持 `recorded_not_sent`。可选的 SES 路径仍是 `submit_succeeded`，`delivered` 只能来自 `/api/aws/ses-events`。
+成功只记 `submit_succeeded` + MessageId。没配 SMTP 时 DEMO 保持 `recorded_not_sent`。SMTP 已配置时优先于 SES，失败不会改走 SES。可选的 SES 路径仍是 `submit_succeeded`，`delivered` 只能来自 `/api/aws/ses-events`。
 
-页面徽章与 `GET /api/health` 会显示 `DEMO_MODE` / `AWS_MODE`、`reviewEngine`、`smtp` 或 `ses`。
+**DynamoDB（`GET /api/health` 的 `dynamo: true` 仅表示将使用真客户端）**
+
+```bash
+ORDERS_TABLE_NAME=ordercheck-orders
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+只设置表名时 `dynamo` 仍为 `false`，`persistence` 为 `memory`。有 `DATABASE_URL` 时用 Postgres，`PERSISTENCE=sqlite` 时用 SQLite，两者都优先于 DynamoDB。表内一条记录的 `pk` 是订单 id，`order` 属性是整单 JSON（邮件、事项、事实、外发）。不要另建消息表。SDK 读写失败会返回错误，不会悄悄改写内存并声称已持久化。工作台 DEMO 闭环仍保存在浏览器；仓库接通后，「加载 DEMO-001」会额外 `POST /api/orders`。
+
+**入站**
+
+```bash
+INBOUND_WEBHOOK_SECRET=...
+# 可选 SES：AWS_REGION、RAW_EMAIL_BUCKET、INBOUND_DOMAIN
+# 可选 OSS：S3_ENDPOINT + 密钥 + S3_BUCKET，或 MAIL_STORE=disk
+```
+
+`POST /api/aws/inbound` 与 `POST /api/inbound/email` 都带 `Authorization: Bearer $INBOUND_WEBHOOK_SECRET`。SES 路径来源是 `ses_inbound`；通用 MIME / 解析正文来源是 `email_inbound`。收件会：规范化 Message-ID 并去重、只接受订单上的买方或卖方地址、把正文里重复出现的已有引用并入证据、按确定性状态机更新相关事项。未知发件人不会被当成买方。对象存储写入失败则不入账。这不是公开造假接口。
+
+**SES 真发信（未配置 SMTP 时的可选路径）**
+
+```bash
+APP_MODE=aws
+AWS_REGION=us-east-1
+SES_FROM_ADDRESS=you@your-verified-domain
+# 可选 SES_REPLY_TO_ADDRESS / SES_CONFIGURATION_SET
+```
+
+页面徽章与 `GET /api/config`、`GET /api/health` 会显示 `DEMO_MODE` / `AWS_MODE`、`reviewEngine`、`reviewEngineSelection`（`explicit` / `auto`）、`liveEngine`、`persistence`、`objectStore`、`smtp` 或 `sesLive`。`dynamo: true` 只表示凭证和表名齐全、且没有更优先的 Postgres/SQLite，不表示某次读写已经成功。`bedrock` / `deepseek` / `ollama` / `gateway` / `smtp` 同样是配置是否具备，不是「这次调用成功」。
+
+## 双引擎对比
+
+工作台加载订单后点 **双引擎对比**，或：
+
+```bash
+curl -s -X POST http://127.0.0.1:43123/api/orders/DEMO-001/review-compare \
+  -H 'content-type: application/json' \
+  -d '{"order": { ... 当前订单 ... }}'
+```
+
+同一张订单会跑确定性引擎，并在 live 引擎可用时再跑一边。auto 的 live 顺序与核对相同：DeepSeek → Ollama → Gateway。只有显式 `REVIEW_ENGINE=bedrock` 且凭证齐全时，live 才是 Bedrock。响应里左右两边各有事项列表和 `agreement`（共有 / 仅一边 / 状态不一致 / Jaccard）。live 未配置时 `live.available` 为 `false`，`live.missing` 列出缺少的环境变量名（不含值），`agreement.comparable` 为 `false`。live 调用失败时事项列表留空，**不会**把规则引擎的事项抄过去。对比不改写订单。
+
+## 确定性引擎评测
+
+夹具在 `lib/eval/fixtures.ts`（不少于 8 个场景：已约定数量不再追问、里程碑不一致、样品版本不一致、价格不完整、运费 / 付款 / 验收缺口，以及 DEMO-001 开场）。评分在 `lib/eval/score.ts`（清单通过率、micro precision / recall）。
+
+```bash
+npm run eval
+# 等价于：npx vitest run lib/eval/score.test.ts
+```
+
+这只给确定性规则引擎打分，不会把分数说成 Bedrock、DeepSeek、Ollama 或 Gateway 的分数。
 
 ## 部署
 
@@ -152,11 +229,11 @@ SMTP_FROM=seller@localhost
 
 - DEMO 发送只记在订单里，投递状态是 `recorded_not_sent`。
 - 样例回放和手工粘贴代替收件，来源标签分别是样例和手工录入。
-- DEMO 默认核对是确定性规则引擎（可显式切到 deepseek / ollama / gateway / bedrock）。
+- DEMO 默认核对是确定性规则引擎。`REVIEW_ENGINE` 留空时按 deepseek → ollama → gateway → deterministic 选择；没有这些密钥时仍是规则引擎。显式 `REVIEW_ENGINE=deterministic` 保持 DEMO-001 本地闭环，也可显式切到 deepseek / ollama / gateway / bedrock。
 
 已实现（AWS 适配，可选遗留，需账号资源才运行时接通）：
 
-- **DynamoDB** `DynamoOrderRepository`。有 `DATABASE_URL` 或 `PERSISTENCE=sqlite` 时不会选它。
+- **DynamoDB** `DynamoOrderRepository`（表名 + 区域 + 凭证齐全，且没有 `DATABASE_URL` / `PERSISTENCE=sqlite` 时；否则 Postgres、SQLite 或内存）。
 - **SES 入站** `handleInboundRecord`（S3 GetObject + MIME 解析 + `ses_inbound` + 去重）。
 - **受保护** `POST /api/aws/inbound`、`POST /api/inbound/email`、`POST /api/aws/ses-events`（`INBOUND_WEBHOOK_SECRET`）。
 - **Bedrock agent 重试**（`BEDROCK_AGENT_RETRY=1`）与 `review_meta` / request id。只在 `REVIEW_ENGINE=bedrock` 时运行。
@@ -172,19 +249,21 @@ SMTP_FROM=seller@localhost
 English checklist for evaluators:
 
 1. **Demo without AWS:** open the site → Load DEMO-001 → Start review → quote-backed issues → draft email → recorded send (`recorded_not_sent`) → scripted replies → agreement summary.
-2. **Health:** `GET /api/health` — `mode`, `reviewEngine`, booleans for `bedrock` / `deepseek` / `ollama` / `ses` / `sesLive` / `smtp` / `dynamo` / `s3` / `gateway` / `inbound`, plus `persistence`, `objectStore`, and `missing` (never secrets).
+2. **Health:** `GET /api/health` — `mode`, `reviewEngine`, `reviewEngineSelection` (`auto` or `explicit`), `liveEngine`, `persistence`, `objectStore`, booleans for `bedrock` / `deepseek` / `ollama` / `ses` / `sesLive` / `smtp` / `dynamo` / `s3` / `gateway` / `inbound`, plus `missing` (never secrets). `dynamo: true` only when table + region + credentials are set.
 3. **Default OSS path:** `REVIEW_ENGINE=auto` picks deepseek, then ollama, then gateway, then deterministic. It does **not** pick Bedrock. Set `REVIEW_ENGINE=bedrock` only for the optional contest path.
-4. **Verify SES SDK path in code:** `lib/aws/ses.ts` constructs `SESClient` + `SendEmailCommand`. With `SES_FROM_ADDRESS` + `AWS_REGION` in AWS mode, send returns `submit_succeeded` + MessageId only — UI states this is **not** delivered.
-5. **Request id screenshot:** with Bedrock or Gateway configured, run review; UI shows small text `引擎 … · request id …` (or gateway tokens) under 待确认事项; API also returns `meta` / `bedrockRequestId`.
-6. **Inbound / events:** production should use SES→S3→Lambda → `handleInboundRecord`. Optional HTTPS forwarders require `Authorization: Bearer $INBOUND_WEBHOOK_SECRET` or `x-ordercheck-secret`. Delivery/bounce/complaint only via `/api/aws/ses-events`.
-7. **Submission brief:** [docs/SUBMISSION.md](docs/SUBMISSION.md). Architecture honesty: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Real-call policy: [docs/adr/ADR-005-real-aws-calls-no-silent-fallback.md](docs/adr/ADR-005-real-aws-calls-no-silent-fallback.md).
+4. **Compare:** load DEMO-001 → **双引擎对比**. With no live key, the right panel says live unavailable and lists missing env names; the left panel is the deterministic issue set. With DeepSeek, Ollama, or Gateway configured, both sides run and the agreement line shows shared / only-one-side issue ids. A live error does not relabel those issues as deterministic.
+5. **Eval:** `npm run eval` scores the deterministic engine on `lib/eval/fixtures.ts` (quantity not re-asked, milestone, sample, price, shipping/payment). It does not claim a model score.
+6. **Verify SES SDK path in code:** `lib/aws/ses.ts` constructs `SESClient` + `SendEmailCommand`. With `SES_FROM_ADDRESS` + `AWS_REGION` in AWS mode and no SMTP, send returns `submit_succeeded` + MessageId only — UI states this is **not** delivered. SMTP (`SMTP_HOST` + `SMTP_FROM`) wins when configured.
+7. **Request id screenshot:** with a live engine configured, run review; UI shows small text `引擎 … · request id …` (or token counts) under 待确认事项, and the header badge `ran:` matches that engine. API also returns `meta` / `bedrockRequestId` or the matching usage field.
+8. **Inbound / events:** production SES should use SES→S3→Lambda → `handleInboundRecord`. Optional HTTPS forwarders (`/api/aws/inbound`, `/api/inbound/email`) require `Authorization: Bearer $INBOUND_WEBHOOK_SECRET` or `x-ordercheck-secret`. A buyer or seller reply is deduped, evidence quotes must sit inside the cited message, and only related issues change. Unknown senders are rejected. Delivery/bounce/complaint only via `/api/aws/ses-events`.
+9. **Submission brief:** [docs/SUBMISSION.md](docs/SUBMISSION.md). Architecture honesty: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). OSS stack: [docs/OSS_RUNTIME.md](docs/OSS_RUNTIME.md). Real-call policy: [docs/adr/ADR-005-real-aws-calls-no-silent-fallback.md](docs/adr/ADR-005-real-aws-calls-no-silent-fallback.md).
 
 ## 接通说明（摘要）
 
 1. 验证 SES 发信身份；测试收件人换成团队自己的地址。
 2. 配好 Bedrock 模型权限；模型输出先做引用校验，再进入状态机。失败不回退规则引擎。
 3. `lib/aws/ses.ts` 成功只能是 `submit_succeeded`；`delivered` 只能来自 SES 事件。
-4. 配置 `ORDERS_TABLE_NAME` 启用 Dynamo；不要在失败时偷偷写回内存。
+4. Dynamo 需要 `ORDERS_TABLE_NAME`、`AWS_REGION` 和访问密钥同时存在。失败不要写回内存再声称已保存。
 5. 配置 `INBOUND_WEBHOOK_SECRET` 后才能用 HTTP 入站/事件转发；否则 501。
 
 行为规则见 [docs/adr](docs/adr)。

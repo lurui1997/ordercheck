@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DynamoOrderRepository, MemoryOrderRepository } from "@/lib/aws/repository";
+import { DynamoOrderRepository, MemoryOrderRepository, selectOrderRepositoryKind } from "@/lib/aws/repository";
 import { createOrderFromScenario } from "@/lib/scenario";
 
 describe("DynamoOrderRepository", () => {
@@ -31,6 +31,21 @@ describe("DynamoOrderRepository", () => {
     const send = vi.fn().mockResolvedValue({ Item: undefined });
     const repo = new DynamoOrderRepository({ tableName: "Orders", client: { send } as never });
     expect(await repo.get("missing")).toBeNull();
+  });
+});
+
+describe("selectOrderRepositoryKind", () => {
+  it("uses Dynamo only when table, region, and credentials are all set", () => {
+    expect(selectOrderRepositoryKind({ ORDERS_TABLE_NAME: "orders", AWS_REGION: "us-east-1" })).toBe("memory");
+    expect(selectOrderRepositoryKind({})).toBe("memory");
+    expect(
+      selectOrderRepositoryKind({
+        ORDERS_TABLE_NAME: "orders",
+        AWS_REGION: "us-east-1",
+        AWS_ACCESS_KEY_ID: "AKIA_TEST",
+        AWS_SECRET_ACCESS_KEY: "secret",
+      }),
+    ).toBe("dynamodb");
   });
 });
 

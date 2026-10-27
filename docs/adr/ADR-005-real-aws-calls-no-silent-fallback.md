@@ -13,12 +13,15 @@ or writing `delivered` without an SES event, would look like integration while l
 
 ## Decision
 
-1. **Engine selection is explicit.** `REVIEW_ENGINE=auto` (or empty) chooses the
-   first configured engine in this order: `deepseek` → `ollama` → `ai_gateway` →
-   `deterministic`. Bedrock is **not** on that list. `REVIEW_ENGINE=bedrock` is the
-   only way to call Bedrock, including in AWS mode. If DeepSeek, Ollama, Bedrock, or
-   Gateway is selected and misconfigured or the call fails, return that engine's
-   error. Never substitute deterministic results under another engine's label.
+1. **Engine selection is labeled.** Explicit `REVIEW_ENGINE` wins. When it is unset
+   or `auto`, choose the first configured engine in this order: `deepseek` →
+   `ollama` → `ai_gateway` → `deterministic`. Bedrock is **not** on that list.
+   `REVIEW_ENGINE=bedrock` is the only way to call Bedrock, including in AWS mode.
+   If DeepSeek, Ollama, Bedrock, or Gateway is selected and misconfigured or the
+   call fails, return that engine's error. Never substitute deterministic results
+   under another engine's label. `POST /api/orders/:id/review-compare` keeps a live
+   failure on the live panel. Compare's live side uses the same preference and
+   includes Bedrock only when it was explicitly selected and credentialed.
 
 2. **SES honesty.** `submitEmail` success → `submit_succeeded` + MessageId only.
    `delivered` / `bounce` / `complaint` come only from `POST /api/aws/ses-events`
@@ -32,10 +35,14 @@ or writing `delivered` without an SES event, would look like integration while l
    reject `source: ses_inbound` and `source: email_inbound`.
 
 4. **Persistence.** `DATABASE_URL` selects Postgres. `PERSISTENCE=sqlite` selects the
-   SQLite file. DynamoDB remains the legacy AWS path when `ORDERS_TABLE_NAME` is set
-   in AWS mode and neither Postgres nor SQLite was selected. Failures surface; no
-   silent Memory write pretending durability. SMTP is the default live mail path
-   when `SMTP_HOST` and `SMTP_FROM` are set; SES remains optional. Success is still
+   SQLite file. Both win over DynamoDB. DynamoDB is the legacy path only when
+   `ORDERS_TABLE_NAME` + `AWS_REGION` + visible AWS credentials are all set and
+   neither Postgres nor SQLite was selected (`health.dynamo` is true only then;
+   `persistence` is `dynamodb`). A table name alone stays on the in-memory store.
+   Explicit `PERSISTENCE=postgres` or `dynamodb` without the required settings
+   fails closed. SDK failures surface; no silent Memory write pretending durability.
+   SMTP is the live mail path when `SMTP_HOST` and `SMTP_FROM` are set and does not
+   fall through to SES on failure. SES remains optional. Success is still
    `submit_succeeded`, never an invented `delivered`.
 
 5. **Observability.** Review responses and `order.review_meta` carry `engine`,

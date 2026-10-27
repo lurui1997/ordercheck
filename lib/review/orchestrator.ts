@@ -1,6 +1,7 @@
 import { IntegrationError, reviewWithBedrock } from "@/lib/aws/bedrock";
 import { getRuntimeConfig, reviewEngineLabel } from "@/lib/aws/config";
 import { GatewayError, reviewWithGateway } from "@/lib/aws/gateway";
+import { DeepSeekError, reviewWithDeepseek } from "@/lib/deepseek";
 import { ChatProviderError, reviewWithOpenAICompatible } from "@/lib/oss/openai-compatible";
 import { applyModelReview } from "@/lib/review/model-apply";
 import { reviewOrder } from "@/lib/review/engine";
@@ -44,42 +45,39 @@ export async function runReview(
     throw new ReviewOrchestrationError("review_engine_invalid", config.reviewEngineError, "deterministic");
   }
 
-  if (engine === "deepseek" || engine === "ollama") {
-    const configured = engine === "deepseek" ? config.deepseekConfigured : config.ollamaConfigured;
-    if (!configured) {
+  if (engine === "ollama") {
+    if (!config.ollamaConfigured) {
       throw new ReviewOrchestrationError(
-        `${engine}_not_configured`,
-        engine === "deepseek"
-          ? "需要 DeepSeek，但缺少 DEEPSEEK_API_KEY。没有调用模型，也没有用规则引擎冒充。"
-          : "需要 Ollama，但缺少 OLLAMA_MODEL。没有调用模型，也没有用规则引擎冒充。",
-        engine,
+        "ollama_not_configured",
+        "需要 Ollama，但缺少 OLLAMA_MODEL。没有调用模型，也没有用规则引擎、DeepSeek 或 Bedrock 冒充。",
+        "ollama",
       );
     }
     try {
-      const chat = await reviewWithOpenAICompatible({ engine, order, env });
+      const chat = await reviewWithOpenAICompatible({ engine: "ollama", order, env });
       const applied = applyModelReview(order, chat.payload);
       if (!applied.ok) {
-        throw new ReviewOrchestrationError(`${engine}_review_rejected`, applied.error, engine);
+        throw new ReviewOrchestrationError("ollama_review_rejected", applied.error, "ollama");
       }
       const meta: ReviewMeta = {
-        engine,
+        engine: "ollama",
         modelRequestId: chat.requestId,
-        usage: chat.usage,
+        ollamaUsage: chat.usage,
         reviewedAt,
       };
       return {
         order: { ...applied.order, review_meta: meta },
-        engine,
-        notice: applied.notice ?? `核对引擎：${reviewEngineLabel(engine)}`,
+        engine: "ollama",
+        notice: applied.notice ?? `核对引擎：${reviewEngineLabel("ollama")}`,
         meta,
       };
     } catch (error) {
       if (error instanceof ReviewOrchestrationError) throw error;
       if (error instanceof ChatProviderError) {
-        throw new ReviewOrchestrationError(error.code, error.message, engine);
+        throw new ReviewOrchestrationError(error.code, error.message, "ollama");
       }
-      const message = error instanceof Error ? error.message : `${engine} 调用失败。`;
-      throw new ReviewOrchestrationError(`${engine}_call_failed`, message, engine);
+      const message = error instanceof Error ? error.message : "Ollama 调用失败。";
+      throw new ReviewOrchestrationError("ollama_call_failed", message, "ollama");
     }
   }
 
@@ -160,6 +158,46 @@ export async function runReview(
       }
       const message = error instanceof Error ? error.message : "AI Gateway 调用失败。";
       throw new ReviewOrchestrationError("gateway_call_failed", message, "ai_gateway");
+    }
+  }
+
+  if (engine === "deepseek") {
+    if (!config.deepseekConfigured) {
+      throw new ReviewOrchestrationError(
+        "deepseek_not_configured",
+        "需要 DeepSeek，但缺少 DEEPSEEK_API_KEY。没有调用模型，也没有用规则引擎、Bedrock 或 AI Gateway 冒充。",
+        "deepseek",
+      );
+    }
+    try {
+      const deepseek = await reviewWithDeepseek({
+        order,
+        apiKey: env.DEEPSEEK_API_KEY ?? "",
+        baseURL: env.DEEPSEEK_BASE_URL,
+        model: env.DEEPSEEK_MODEL,
+      });
+      const applied = applyModelReview(order, deepseek.payload);
+      if (!applied.ok) {
+        throw new ReviewOrchestrationError("deepseek_review_rejected", applied.error, "deepseek");
+      }
+      const meta: ReviewMeta = {
+        engine: "deepseek",
+        deepseekUsage: deepseek.usage,
+        reviewedAt,
+      };
+      return {
+        order: { ...applied.order, review_meta: meta },
+        engine: "deepseek",
+        notice: applied.notice ?? `核对引擎：${reviewEngineLabel("deepseek")}`,
+        meta,
+      };
+    } catch (error) {
+      if (error instanceof ReviewOrchestrationError) throw error;
+      if (error instanceof DeepSeekError) {
+        throw new ReviewOrchestrationError(error.code, error.message, "deepseek");
+      }
+      const message = error instanceof Error ? error.message : "DeepSeek 调用失败。";
+      throw new ReviewOrchestrationError("deepseek_call_failed", message, "deepseek");
     }
   }
 

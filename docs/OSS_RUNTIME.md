@@ -8,8 +8,8 @@ DEMO-001 在不填任何密钥时仍走确定性规则引擎，外发状态是 `
 
 | 原来的 AWS 产品 | 开源 / 可自建替代 | 代码 | 何时启用 |
 |---|---|---|---|
-| Bedrock | DeepSeek（OpenAI 兼容） | `lib/oss/openai-compatible.ts` | `DEEPSEEK_API_KEY`，或 `REVIEW_ENGINE=deepseek` |
-| Bedrock | Ollama `/v1` | 同上 | `OLLAMA_MODEL`（地址默认 `http://127.0.0.1:11434/v1`） |
+| Bedrock | DeepSeek（OpenAI 兼容） | `lib/deepseek.ts` | `DEEPSEEK_API_KEY`，或 `REVIEW_ENGINE=deepseek`。写入前会规范化枚举 |
+| Bedrock | Ollama `/v1` | `lib/oss/openai-compatible.ts` | `OLLAMA_MODEL`（地址默认 `http://127.0.0.1:11434/v1`） |
 | SES SendEmail | SMTP（Postal、Mailu、Haraka、docker-mailserver、Mailpit） | `lib/oss/smtp.ts` | `SMTP_HOST` + `SMTP_FROM` |
 | S3 | MinIO 或其他 S3 兼容存储 | `lib/oss/object-store.ts` | `S3_ENDPOINT` + `S3_ACCESS_KEY` + `S3_SECRET_KEY` + `S3_BUCKET`，`S3_FORCE_PATH_STYLE=true` |
 | S3 | 本地磁盘 | 同上 | `MAIL_STORE=disk` 或 `MAIL_DIR` |
@@ -33,7 +33,7 @@ DEMO-001 在不填任何密钥时仍走确定性规则引擎，外发状态是 `
 
 Bedrock 不在这条链上。只有 `REVIEW_ENGINE=bedrock` 才会调用 `lib/aws/bedrock.ts`。选中的模型失败时返回对应的 `deepseek_*` / `ollama_*` / `bedrock_*` / `gateway_*` 错误，不会悄悄换成规则引擎再标成模型。
 
-邮件草稿失败时会退回确定性模板，并把 `draftEngine` 标成 `deterministic`。
+DeepSeek 草稿失败会抛错，不替换成确定性模板。Ollama、Gateway、Bedrock 的草稿失败会退回确定性模板，并把 `draftEngine` 标成 `deterministic`。
 
 ## 发信
 
@@ -45,7 +45,7 @@ Bedrock 不在这条链上。只有 `REVIEW_ENGINE=bedrock` 才会调用 `lib/aw
 
 ## 存储与入站
 
-- `persistence`：`postgres` | `sqlite` | `dynamo` | `memory`
+- `persistence`：`postgres` | `sqlite` | `dynamodb` | `memory`
 - `objectStore`：`minio` | `s3` | `disk` | `none`
 - `POST /api/aws/inbound` 保留，给 SES → S3 → Lambda。
 - `POST /api/inbound/email` 接受原始 MIME（`raw`）或解析后的 `text` / `subject` / `from` / `to` / `messageId` / `orderId`。来源标签是 `email_inbound`，不是 `ses_inbound`。

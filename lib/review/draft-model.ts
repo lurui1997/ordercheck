@@ -7,6 +7,7 @@ import {
 import { createGateway } from "@ai-sdk/gateway";
 import { generateText } from "ai";
 import { getRuntimeConfig } from "@/lib/aws/config";
+import { DeepSeekError, draftWithDeepseek } from "@/lib/deepseek";
 import { ChatProviderError, draftWithOpenAICompatible } from "@/lib/oss/openai-compatible";
 import { buildDraft } from "@/lib/review/draft";
 import type { EmailDraft, Order, ReviewEngine, RuntimeConfig } from "@/lib/types";
@@ -177,9 +178,9 @@ async function draftWithGateway(order: Order, issueIds: string[], env: EnvLike):
   return toEmailDraft(order, issueIds, fields.subject, fields.body);
 }
 
-async function draftWithChat(order: Order, issueIds: string[], env: EnvLike, engine: "deepseek" | "ollama"): Promise<EmailDraft> {
+async function draftWithOllama(order: Order, issueIds: string[], env: EnvLike): Promise<EmailDraft> {
   const fields = await draftWithOpenAICompatible({
-    engine,
+    engine: "ollama",
     order,
     prompt: buildDraftPrompt(order, issueIds),
     env,
@@ -189,9 +190,9 @@ async function draftWithChat(order: Order, issueIds: string[], env: EnvLike, eng
 
 /**
  * Optional LLM path for confirmation email drafts.
- * When a remote engine is selected and configured, tries that model.
- * On any failure falls back to deterministic buildDraft and labels draftEngine
- * as "deterministic" (never as bedrock, deepseek, or ollama).
+ * Bedrock, AI Gateway, and Ollama failures fall back to deterministic buildDraft
+ * and label draftEngine as "deterministic".
+ * DeepSeek failures throw DeepSeekError and do not substitute that template.
  */
 export async function draftWithModel(
   order: Order,
@@ -215,21 +216,42 @@ export async function draftWithModel(
     }
   }
 
-  if ((engine === "deepseek" || engine === "ollama") && (engine === "deepseek" ? config.deepseekConfigured : config.ollamaConfigured)) {
+  if (engine === "deepseek") {
+    if (!config.deepseekConfigured) {
+      throw new DeepSeekError(
+        "deepseek_not_configured",
+        "需要 DeepSeek 草稿，但缺少 DEEPSEEK_API_KEY。没有调用模型，也没有改用确定性模板。",
+      );
+    }
+    const draft = await draftWithDeepseek({
+      order,
+      issueIds,
+      apiKey: env.DEEPSEEK_API_KEY ?? "",
+      baseURL: env.DEEPSEEK_BASE_URL,
+      model: env.DEEPSEEK_MODEL,
+      prompt: buildDraftPrompt(order, issueIds),
+    });
+    return {
+      draft,
+      draftEngine: "deepseek" as const,
+      notice: "Confirmation draft generated with DeepSeek (not Bedrock, not AI Gateway).",
+    };
+  }
+
+  if (engine === "ollama" && config.ollamaConfigured) {
     try {
-      const draft = await draftWithChat(order, issueIds, env, engine);
-      const name = engine === "deepseek" ? "DeepSeek" : "Ollama";
+      const draft = await draftWithOllama(order, issueIds, env);
       return {
         draft,
-        draftEngine: engine,
-        notice: `Confirmation draft generated with ${name} (not Bedrock).`,
+        draftEngine: "ollama",
+        notice: "Confirmation draft generated with Ollama (not Bedrock, not DeepSeek).",
       };
     } catch (error) {
-      const message = error instanceof ChatProviderError ? error.message : error instanceof Error ? error.message : `${engine}_draft_failed`;
+      const message = error instanceof ChatProviderError ? error.message : error instanceof Error ? error.message : "ollama_draft_failed";
       return {
         draft: buildDraft(order, issueIds),
         draftEngine: "deterministic",
-        notice: `${engine} draft failed (${message}); fell back to deterministic buildDraft.`,
+        notice: `Ollama draft failed (${message}); fell back to deterministic buildDraft.`,
       };
     }
   }

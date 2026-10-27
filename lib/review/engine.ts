@@ -499,6 +499,25 @@ function mergeStatus(previous: IssueStatus | undefined, computed: IssueStatus): 
   return computed;
 }
 
+function withInboundNote(reason: string, trigger?: Message): string {
+  if (trigger?.source !== "ses_inbound") return reason;
+  return `${reason} 触发消息来自 SES 入站。`;
+}
+
+/** Attach the triggering message when it repeats an existing grounded quote. Does not change status. */
+function mergeTriggerEvidence(issue: Issue, trigger?: Message): Issue {
+  if (!trigger || trigger.source === "demo_outbound") return issue;
+  const extras: Evidence[] = [];
+  for (const item of issue.evidence) {
+    if (item.message_id === trigger.id) continue;
+    if (item.quote.length < 8) continue;
+    if (!trigger.body.includes(item.quote)) continue;
+    extras.push({ message_id: trigger.id, quote: item.quote });
+  }
+  if (extras.length === 0) return issue;
+  return { ...issue, evidence: dedupe([...issue.evidence, ...extras]) };
+}
+
 function recompute(order: Order, trigger?: Message): Order {
   const analyzable = order.messages.filter((message) => message.source !== "demo_outbound");
   const updatedAt = trigger?.sent_at ?? analyzable.at(-1)?.sent_at ?? "2026-10-24T09:01:00Z";
@@ -511,18 +530,21 @@ function recompute(order: Order, trigger?: Message): Order {
     const prev = previous.get(issue.issue_id);
     const status = mergeStatus(prev?.status, issue.status);
     if (!prev) {
-      return {
-        ...issue,
-        history: [
-          {
-            at: updatedAt,
-            from: null,
-            to: issue.status,
-            actor: "system",
-            reason: "初次核对。缺少的信息保持未知，没有补写。",
-          },
-        ],
-      };
+      return mergeTriggerEvidence(
+        {
+          ...issue,
+          history: [
+            {
+              at: updatedAt,
+              from: null,
+              to: issue.status,
+              actor: "system",
+              reason: withInboundNote("初次核对。缺少的信息保持未知，没有补写。", trigger),
+            },
+          ],
+        },
+        trigger,
+      );
     }
 
     if (HOLD.includes(prev.status) && status === prev.status) return prev;
@@ -543,7 +565,7 @@ function recompute(order: Order, trigger?: Message): Order {
         to: status,
         message_id: trigger?.id,
         actor: "system",
-        reason: derived.reasons[issue.issue_id] ?? issue.impact,
+        reason: withInboundNote(derived.reasons[issue.issue_id] ?? issue.impact, trigger),
       });
     } else if (touched && status === prev.status && derived.notes[issue.issue_id] && (status === "unconfirmed" || status === "question_sent")) {
       history.push({
@@ -552,18 +574,33 @@ function recompute(order: Order, trigger?: Message): Order {
         to: status,
         message_id: trigger?.id,
         actor: "system",
-        reason: derived.notes[issue.issue_id] ?? "",
+        reason: withInboundNote(derived.notes[issue.issue_id] ?? "", trigger),
+      });
+    } else if (
+      trigger?.source === "ses_inbound" &&
+      issue.evidence.some((item) => item.quote.length >= 8 && trigger.body.includes(item.quote))
+    ) {
+      history.push({
+        at: trigger.sent_at,
+        from: status,
+        to: status,
+        message_id: trigger.id,
+        actor: "system",
+        reason: "SES 入站复述了已有引用，证据已并入；状态未因复述而关闭。",
       });
     }
 
-    return {
-      ...issue,
-      status,
-      history,
-      decision_reason: decisionReason,
-      decision_actor: decisionActor,
-      updated_at: touched || status !== prev.status ? (trigger?.sent_at ?? updatedAt) : prev.updated_at,
-    };
+    return mergeTriggerEvidence(
+      {
+        ...issue,
+        status,
+        history,
+        decision_reason: decisionReason,
+        decision_actor: decisionActor,
+        updated_at: touched || status !== prev.status ? (trigger?.sent_at ?? updatedAt) : prev.updated_at,
+      },
+      trigger,
+    );
   });
 
   return {

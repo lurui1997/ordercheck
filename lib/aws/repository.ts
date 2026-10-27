@@ -4,7 +4,9 @@ import { getRuntimeConfig } from "@/lib/aws/config";
 import { openPostgresRepository } from "@/lib/oss/postgres-repository";
 import { openSqliteRepository } from "@/lib/oss/sqlite-repository";
 import { getOrder, saveOrder } from "@/lib/store";
-import type { Order } from "@/lib/types";
+import type { Order, PersistenceKind } from "@/lib/types";
+
+type EnvLike = Record<string, string | undefined>;
 
 export interface OrderRepository {
   get(id: string): Promise<Order | null>;
@@ -29,8 +31,10 @@ export interface DynamoOrderRepositoryOptions {
 }
 
 /**
- * Single-table order store: pk = orderId, attribute `order` holds the full Order JSON.
- * Selected only when ORDERS_TABLE_NAME is set; failures surface — no silent Memory fallback.
+ * Single-table order store: pk = orderId, attribute `order` holds the full Order JSON
+ * (messages, issues, facts, outbound). There is no second table to invent.
+ * Selected only when table + region + credentials are all set.
+ * SDK errors propagate — callers must not write the same snapshot to memory and call it durable.
  */
 export class DynamoOrderRepository implements OrderRepository {
   private readonly tableName: string;
@@ -81,12 +85,16 @@ export class DynamoOrderRepository implements OrderRepository {
   }
 }
 
-type EnvLike = Record<string, string | undefined>;
+/** Which store will be constructed. Does not open a client. */
+export function selectOrderRepositoryKind(env: EnvLike = process.env): PersistenceKind {
+  return getRuntimeConfig(env).persistence;
+}
 
 /**
  * Postgres when DATABASE_URL is set; else SQLite when PERSISTENCE=sqlite;
- * else DynamoDB on the legacy AWS path; else memory.
+ * else DynamoDB when table + region + credentials are all set; else memory.
  * Misconfigured explicit modes throw — they do not silently use memory.
+ * Dynamo failures are not retried against memory.
  */
 export function createOrderRepository(env: EnvLike = process.env): OrderRepository {
   const config = getRuntimeConfig(env);
@@ -99,7 +107,7 @@ export function createOrderRepository(env: EnvLike = process.env): OrderReposito
   if (config.persistence === "sqlite") {
     return openSqliteRepository(env.SQLITE_PATH?.trim() || ".data/orders.sqlite");
   }
-  if (config.persistence === "dynamo") {
+  if (config.persistence === "dynamodb") {
     return new DynamoOrderRepository({
       tableName: env.ORDERS_TABLE_NAME,
       region: env.AWS_REGION,

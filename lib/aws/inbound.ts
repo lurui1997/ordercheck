@@ -42,10 +42,24 @@ async function streamToString(body: unknown): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function resolveRole(order: Order, fromEmail: string): Role {
-  const normalized = fromEmail.toLowerCase();
-  if (normalized && normalized === order.seller.email.toLowerCase()) return "seller";
-  return "buyer";
+export function canonicalMessageId(id: string): string {
+  return id.trim().replace(/^<|>$/g, "").toLowerCase();
+}
+
+function sentAtFromMime(dateHeader: string): string {
+  if (!dateHeader.trim()) return new Date().toISOString();
+  const parsed = Date.parse(dateHeader);
+  if (Number.isNaN(parsed)) return new Date().toISOString();
+  return new Date(parsed).toISOString();
+}
+
+/** Buyer or seller on the order only. Unknown senders are not assumed to be the buyer. */
+function resolveRole(order: Order, fromEmail: string): Role | null {
+  const normalized = fromEmail.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === order.buyer.email.toLowerCase()) return "buyer";
+  if (normalized === order.seller.email.toLowerCase()) return "seller";
+  return null;
 }
 
 export async function applyParsedInbound(input: {
@@ -55,15 +69,21 @@ export async function applyParsedInbound(input: {
   from: string;
   subject: string;
   body: string;
+  sentAt?: string;
   source: Extract<MessageSource, "ses_inbound" | "email_inbound">;
 }): Promise<InboundResult> {
+  const messageId = canonicalMessageId(input.messageId);
+  if (!messageId) {
+    return { status: "apply_failed", orderId: input.orderId, error: "缺少 Message-ID，拒绝写入以免无法去重。" };
+  }
+
   const repository = input.repository ?? createOrderRepository();
   const order = await repository.get(input.orderId);
   if (!order) {
     return { status: "unmatched", orderId: input.orderId, error: "订单不存在。" };
   }
 
-  if (order.messages.some((item) => item.id === input.messageId)) {
+  if (order.messages.some((item) => canonicalMessageId(item.id) === messageId)) {
     return { status: "duplicate", orderId: input.orderId };
   }
 
@@ -71,11 +91,20 @@ export async function applyParsedInbound(input: {
     return { status: "apply_failed", orderId: input.orderId, error: "邮件正文为空。" };
   }
 
+  const fromRole = resolveRole(order, input.from);
+  if (!fromRole) {
+    return {
+      status: "apply_failed",
+      orderId: input.orderId,
+      error: "发件人不是这张订单的买方或卖方，未写入，也没有改事项状态。",
+    };
+  }
+
   const message: Message = {
-    id: input.messageId,
+    id: messageId,
     source: input.source,
-    from_role: resolveRole(order, input.from),
-    sent_at: new Date().toISOString(),
+    from_role: fromRole,
+    sent_at: input.sentAt ?? new Date().toISOString(),
     subject: input.subject || `Re: OrderCheck ${input.orderId}`,
     body: input.body,
   };
@@ -86,6 +115,11 @@ export async function applyParsedInbound(input: {
   });
   if (!result.ok) {
     return { status: "apply_failed", orderId: input.orderId, error: result.error };
+  }
+
+  const ungrounded = ungroundedEvidence(result.order);
+  if (ungrounded) {
+    return { status: "apply_failed", orderId: input.orderId, error: ungrounded };
   }
 
   await repository.save(result.order);
@@ -144,7 +178,10 @@ export async function handleInboundRecord(
   }
 
   const parsed = parseSimpleMime(raw);
-  const messageId = parsed.messageId || record.messageId;
+  const messageId = canonicalMessageId(parsed.messageId || record.messageId);
+  if (!messageId) {
+    return { status: "apply_failed", error: "缺少 Message-ID，拒绝写入以免无法去重。" };
+  }
   const orderId = extractOrderIdFromMail({
     subject: parsed.subject,
     recipients: record.recipients,
@@ -163,6 +200,20 @@ export async function handleInboundRecord(
     from: parsed.from,
     subject: parsed.subject,
     body: parsed.body,
+    sentAt: sentAtFromMime(parsed.date),
     source: "ses_inbound",
   });
+}
+
+/** Refuse to persist a reply whose quotes are not substrings of the cited message. */
+function ungroundedEvidence(order: Order): string | null {
+  for (const issue of order.issues) {
+    for (const item of [...issue.evidence, ...issue.resolution_evidence]) {
+      const message = order.messages.find((entry) => entry.id === item.message_id);
+      if (!message || !message.body.includes(item.quote)) {
+        return `事项 ${issue.issue_id} 的引用不在消息 ${item.message_id} 中，已拒绝保存。`;
+      }
+    }
+  }
+  return null;
 }
